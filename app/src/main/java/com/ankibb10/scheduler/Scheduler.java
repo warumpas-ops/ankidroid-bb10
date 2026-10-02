@@ -104,8 +104,10 @@ public class Scheduler {
         int revlogLastIvl;
         if (lastTyp == Card.TYPE_REVIEW) {
             revlogLastIvl = lastIvl; // positive days
+        } else if (lastTyp == Card.TYPE_NEW) {
+            revlogLastIvl = 0; // 0 = standard Anki marker for card introduced from New
         } else {
-            revlogLastIvl = -60; // negative seconds
+            revlogLastIvl = lastIvl < 0 ? lastIvl : -60; // negative seconds for learn/relearn
         }
 
         mDb.updateCard(card);
