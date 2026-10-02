@@ -11,6 +11,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONException;
 
+import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -988,7 +989,138 @@ public class AnkiDatabase {
         } finally {
             try { mDb.endTransaction(); } catch (Exception ignored) {}
         }
+        updateDecksCommonForToday(usn);
         checkpointWal();
+    }
+
+    private static byte[] encodeVarint(long val) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        while (true) {
+            byte b = (byte) (val & 0x7F);
+            val >>>= 7;
+            if (val != 0) {
+                baos.write(b | 0x80);
+            } else {
+                baos.write(b);
+                break;
+            }
+        }
+        return baos.toByteArray();
+    }
+
+    private byte[] extractProtoBytes(byte[] proto, int targetField) {
+        if (proto == null) return null;
+        try {
+            int pos = 0;
+            while (pos < proto.length) {
+                int tag = proto[pos++] & 0xff;
+                int fn = tag >> 3;
+                int wt = tag & 7;
+                if (wt == 0) {
+                    while (pos < proto.length && (proto[pos] & 0x80) != 0) pos++;
+                    if (pos < proto.length) pos++;
+                } else if (wt == 2) {
+                    int len = 0; int shift = 0;
+                    while (pos < proto.length) {
+                        int b = proto[pos++] & 0xff;
+                        len |= (b & 0x7f) << shift;
+                        shift += 7;
+                        if ((b & 0x80) == 0) break;
+                    }
+                    if (fn == targetField) {
+                        byte[] res = new byte[len];
+                        System.arraycopy(proto, pos, res, 0, len);
+                        return res;
+                    }
+                    pos += len;
+                } else if (wt == 1) {
+                    pos += 8;
+                } else if (wt == 5) {
+                    pos += 4;
+                } else break;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "extractProtoBytes error", e);
+        }
+        return null;
+    }
+
+    public void updateDecksCommonForToday(int usn) {
+        if (mDb == null || !mDb.isOpen()) return;
+        try {
+            int today = todayDays();
+            long dayStartMs = (mColCrt + ((long) today * 86400L)) * 1000L;
+
+            Cursor dc = mDb.rawQuery("SELECT id, common FROM decks", null);
+            List<Long> dids = new ArrayList<Long>();
+            List<byte[]> commons = new ArrayList<byte[]>();
+            while (dc.moveToNext()) {
+                dids.add(dc.getLong(0));
+                commons.add(dc.getBlob(1));
+            }
+            dc.close();
+
+            for (int i = 0; i < dids.size(); i++) {
+                long did = dids.get(i);
+                byte[] oldCommon = commons.get(i);
+
+                // Count unique new cards studied today
+                int newStudied = 0;
+                Cursor c = mDb.rawQuery(
+                        "SELECT COUNT(DISTINCT revlog.cid) FROM revlog JOIN cards ON revlog.cid = cards.id " +
+                        "WHERE cards.did = ? AND revlog.id >= ? AND (revlog.type = 0 OR revlog.lastIvl = 0)",
+                        new String[]{String.valueOf(did), String.valueOf(dayStartMs)}
+                );
+                if (c.moveToFirst()) newStudied = c.getInt(0);
+                c.close();
+
+                // Count review cards studied today
+                int revStudied = 0;
+                c = mDb.rawQuery(
+                        "SELECT COUNT(*) FROM revlog JOIN cards ON revlog.cid = cards.id " +
+                        "WHERE cards.did = ? AND revlog.id >= ? AND revlog.type = 1",
+                        new String[]{String.valueOf(did), String.valueOf(dayStartMs)}
+                );
+                if (c.moveToFirst()) revStudied = c.getInt(0);
+                c.close();
+
+                if (newStudied > 0 || revStudied > 0) {
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    // Field 3: last_day_studied (varint)
+                    baos.write(0x18);
+                    baos.write(encodeVarint(today));
+                    // Field 4: new_studied (varint)
+                    baos.write(0x20);
+                    baos.write(encodeVarint(newStudied));
+                    // Field 5: review_studied (varint)
+                    baos.write(0x28);
+                    baos.write(encodeVarint(revStudied));
+
+                    // Preserve field 255 (other) if present in oldCommon
+                    byte[] f255 = extractProtoBytes(oldCommon, 255);
+                    if (f255 != null && f255.length > 0) {
+                        baos.write(0xFA);
+                        baos.write(0x0F);
+                        baos.write(encodeVarint(f255.length));
+                        baos.write(f255);
+                    } else {
+                        byte[] defOther = "{\"desiredRetention\":null}".getBytes("UTF-8");
+                        baos.write(0xFA);
+                        baos.write(0x0F);
+                        baos.write(encodeVarint(defOther.length));
+                        baos.write(defOther);
+                    }
+
+                    byte[] newCommonBlob = baos.toByteArray();
+                    mDb.execSQL("UPDATE decks SET common=?, usn=? WHERE id=?",
+                            new Object[]{newCommonBlob, usn, did});
+                    Log.i(TAG, "Updated decks.common for did=" + did + ": new_studied=" + newStudied + ", rev_studied=" + revStudied + ", today=" + today);
+                }
+            }
+        } catch (Exception e) {
+            // decks table may not exist in pre-schema 18 collections
+            Log.w(TAG, "updateDecksCommonForToday notice: " + e.getMessage());
+        }
     }
 
     public void prepareForUpload(int targetUsn) {
@@ -1165,6 +1297,7 @@ public class AnkiDatabase {
         } finally {
             try { mDb.endTransaction(); } catch (Exception ignored) {}
         }
+        updateDecksCommonForToday(usn);
         checkpointWal();
     }
 
