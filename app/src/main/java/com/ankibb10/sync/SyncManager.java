@@ -163,10 +163,12 @@ public class SyncManager {
             long localMod = 0;
             AnkiDatabase.PendingChanges pending = null;
 
+            long localScm = 0;
             try {
                 AnkiDatabase localDb = new AnkiDatabase(dbPath);
                 hasLocalChanges = localDb.hasUnsyncedChanges();
                 localMod = localDb.getColMod();
+                localScm = localDb.getColScm();
                 if (hasLocalChanges) {
                     pending = localDb.getPendingChanges();
                 }
@@ -178,11 +180,13 @@ public class SyncManager {
 
             long serverMod = (meta != null && meta.has("mod")) ? meta.optLong("mod", 0) : 0;
             int serverUsn  = (meta != null && meta.has("usn")) ? meta.optInt("usn", 0) : 0;
+            long serverScm = (meta != null && meta.has("scm")) ? meta.optLong("scm", 0) : 0;
             long normLocalMod  = localMod > 100000000000L ? (localMod / 1000L) : localMod;
             long normServerMod = serverMod > 100000000000L ? (serverMod / 1000L) : serverMod;
-            Log.i(TAG, "Sync check: hasLocalChanges=" + hasLocalChanges + ", normLocalMod=" + normLocalMod + ", normServerMod=" + normServerMod + ", serverUsn=" + serverUsn);
+            boolean serverNewer = (normServerMod > normLocalMod) || (serverScm > 0 && localScm > 0 && serverScm != localScm);
+            Log.i(TAG, "Sync check: hasLocalChanges=" + hasLocalChanges + ", normLocalMod=" + normLocalMod + ", normServerMod=" + normServerMod + ", serverUsn=" + serverUsn + ", serverNewer=" + serverNewer);
 
-            if (hasLocalChanges && normServerMod > normLocalMod && pending != null && !pending.isEmpty()) {
+            if (hasLocalChanges && serverNewer && pending != null && !pending.isEmpty()) {
                 // MERGE SCENARIO: User studied on PC (server is newer) AND has offline reviews on BlackBerry!
                 listener.onProgress("Merging offline reviews with PC changes...");
 
@@ -237,7 +241,7 @@ public class SyncManager {
                 prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
                 listener.onSuccess("Synced: all study activity uploaded to AnkiWeb!");
 
-            } else if (normServerMod > normLocalMod) {
+            } else if (serverNewer) {
                 // NORMAL DOWNLOAD: User studied on PC, no local changes on BlackBerry
                 listener.onProgress("Downloading newer collection from AnkiWeb...");
 

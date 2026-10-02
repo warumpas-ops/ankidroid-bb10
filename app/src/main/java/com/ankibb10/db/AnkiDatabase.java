@@ -943,6 +943,19 @@ public class AnkiDatabase {
         }
     }
 
+    public long getColScm() {
+        if (mDb == null || !mDb.isOpen()) return 0;
+        try {
+            Cursor c = mDb.rawQuery("SELECT scm FROM col", null);
+            long scm = 0;
+            if (c.moveToFirst()) scm = c.getLong(0);
+            c.close();
+            return scm;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     public int todayDays() {
         return (int)((System.currentTimeMillis() / 1000 - mColCrt) / 86400);
     }
