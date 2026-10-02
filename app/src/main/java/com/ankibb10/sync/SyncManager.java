@@ -278,7 +278,14 @@ public class SyncManager {
             Log.e(TAG, "Sync failed", e);
             String msg = e.getMessage();
             if (msg == null || msg.isEmpty()) msg = e.toString();
-            listener.onError("Sync failed: " + msg);
+            // Make the error message actionable
+            if (msg.contains("403") || msg.contains("SESSION_EXPIRED") || msg.contains("Invalid") || msg.contains("credentials")) {
+                listener.onError("SESSION_EXPIRED: AnkiWeb session expired. Tap 'Reconnect Account' to re-enter your credentials.");
+            } else if (msg.contains("UnknownHost") || msg.contains("timeout") || msg.contains("SocketTimeout") || msg.contains("ConnectException")) {
+                listener.onError("Network error. Check your Wi-Fi/mobile connection and try again.");
+            } else {
+                listener.onError("Sync failed: " + msg);
+            }
         } finally {
             sIsSyncing.set(false);
         }

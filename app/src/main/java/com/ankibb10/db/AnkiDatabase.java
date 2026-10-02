@@ -43,16 +43,168 @@ public class AnkiDatabase {
         Cursor c = mDb.rawQuery("SELECT crt, conf, models, decks, dconf FROM col LIMIT 1", null);
         if (c.moveToFirst()) {
             mColCrt = c.getLong(0);
-            try {
-                mConf   = new JSONObject(c.getString(1));
-                mModels = new JSONObject(c.getString(2));
-                mDecks  = new JSONObject(c.getString(3));
-                mDconf  = new JSONObject(c.getString(4));
-            } catch (JSONException e) {
-                Log.e(TAG, "Failed to parse col JSON", e);
-            }
+            String confStr   = c.getString(1);
+            String modelsStr = c.getString(2);
+            String decksStr  = c.getString(3);
+            String dconfStr  = c.getString(4);
+            try { if (confStr   != null && !confStr.isEmpty())   mConf   = new JSONObject(confStr);   } catch (JSONException ignored) {}
+            try { if (modelsStr != null && !modelsStr.isEmpty()) mModels = new JSONObject(modelsStr); } catch (JSONException ignored) {}
+            try { if (decksStr  != null && !decksStr.isEmpty())  mDecks  = new JSONObject(decksStr);  } catch (JSONException ignored) {}
+            try { if (dconfStr  != null && !dconfStr.isEmpty())  mDconf  = new JSONObject(dconfStr);  } catch (JSONException ignored) {}
         }
         c.close();
+
+        // Schema 18 fallback: if JSON blobs are empty, read from dedicated tables
+        if (mModels == null || mModels.length() == 0) loadModelsFromTable();
+        if (mDecks  == null || mDecks.length()  == 0) loadDecksFromTable();
+        if (mDconf  == null || mDconf.length()   == 0) loadDconfFromTable();
+
+        if (mColCrt <= 0) mColCrt = System.currentTimeMillis() / 1000 - 86400;
+    }
+
+    // ---- Schema 18 table-based fallbacks ----
+
+    private void loadDecksFromTable() {
+        try {
+            mDecks = new JSONObject();
+            Cursor dc = mDb.rawQuery("SELECT id, name FROM decks", null);
+            while (dc.moveToNext()) {
+                long did = dc.getLong(0);
+                String name = dc.getString(1);
+                JSONObject d = new JSONObject();
+                d.put("id", did); d.put("name", name); d.put("conf", 1L); d.put("collapsed", false);
+                mDecks.put(String.valueOf(did), d);
+            }
+            dc.close();
+            Log.i(TAG, "Schema 18: loaded " + mDecks.length() + " decks from decks table");
+        } catch (Exception e) {
+            Log.e(TAG, "Schema 18 loadDecksFromTable failed", e);
+            mDecks = new JSONObject();
+        }
+    }
+
+    private void loadDconfFromTable() {
+        try {
+            mDconf = new JSONObject();
+            try {
+                Cursor dc = mDb.rawQuery("SELECT id, name, config FROM deck_config", null);
+                while (dc.moveToNext()) {
+                    long cid  = dc.getLong(0);
+                    String nm = dc.getString(1);
+                    byte[] blob = dc.getBlob(2);
+                    int newPerDay = 20, maxReviews = 200;
+                    if (blob != null) {
+                        int[] vals = parseProtoVarints(blob, new int[]{9, 10});
+                        if (vals[0] > 0) newPerDay  = vals[0];
+                        if (vals[1] > 0) maxReviews = vals[1];
+                    }
+                    JSONObject cfg = new JSONObject();
+                    cfg.put("id", cid); cfg.put("name", nm);
+                    JSONObject n = new JSONObject(); n.put("perDay", newPerDay);
+                    JSONObject r = new JSONObject(); r.put("perDay", maxReviews);
+                    cfg.put("new", n); cfg.put("rev", r);
+                    mDconf.put(String.valueOf(cid), cfg);
+                }
+                dc.close();
+            } catch (Exception e) { Log.w(TAG, "Schema 18 deck_config read warning", e); }
+            if (!mDconf.has("1")) {
+                JSONObject def = new JSONObject(); def.put("id", 1); def.put("name", "Default");
+                JSONObject n = new JSONObject(); n.put("perDay", 20);
+                JSONObject r = new JSONObject(); r.put("perDay", 200);
+                def.put("new", n); def.put("rev", r);
+                mDconf.put("1", def);
+            }
+            Log.i(TAG, "Schema 18: loaded dconf entries=" + mDconf.length());
+        } catch (Exception e) { Log.e(TAG, "Schema 18 loadDconfFromTable failed", e); }
+    }
+
+    private void loadModelsFromTable() {
+        try {
+            mModels = new JSONObject();
+            Cursor nc = mDb.rawQuery("SELECT id, name, config FROM notetypes", null);
+            while (nc.moveToNext()) {
+                long mid = nc.getLong(0); String mn = nc.getString(1); byte[] cfg = nc.getBlob(2);
+                JSONObject model = new JSONObject();
+                model.put("id", mid); model.put("name", mn);
+                model.put("css", (cfg != null) ? extractProtoString(cfg, 4) : "");
+                mModels.put(String.valueOf(mid), model);
+            }
+            nc.close();
+
+            java.util.Map<Long, JSONArray> fieldMap = new java.util.LinkedHashMap<Long, JSONArray>();
+            Cursor fc = mDb.rawQuery("SELECT ntid, ord, name FROM fields ORDER BY ntid, ord", null);
+            while (fc.moveToNext()) {
+                long ntid = fc.getLong(0);
+                if (!fieldMap.containsKey(ntid)) fieldMap.put(ntid, new JSONArray());
+                JSONObject fld = new JSONObject(); fld.put("name", fc.getString(2)); fld.put("ord", fc.getInt(1));
+                fieldMap.get(ntid).put(fld);
+            }
+            fc.close();
+
+            java.util.Map<Long, JSONArray> tmplMap = new java.util.LinkedHashMap<Long, JSONArray>();
+            Cursor tc = mDb.rawQuery("SELECT ntid, ord, name, config FROM templates ORDER BY ntid, ord", null);
+            while (tc.moveToNext()) {
+                long ntid = tc.getLong(0); byte[] tcfg = tc.getBlob(3);
+                if (!tmplMap.containsKey(ntid)) tmplMap.put(ntid, new JSONArray());
+                JSONObject tmpl = new JSONObject();
+                tmpl.put("ord", tc.getInt(1)); tmpl.put("name", tc.getString(2));
+                tmpl.put("qfmt", tcfg != null ? extractProtoString(tcfg, 1) : "");
+                tmpl.put("afmt", tcfg != null ? extractProtoString(tcfg, 2) : "");
+                tmplMap.get(ntid).put(tmpl);
+            }
+            tc.close();
+
+            java.util.Iterator<String> keys = mModels.keys();
+            while (keys.hasNext()) {
+                String key = keys.next();
+                JSONObject model = mModels.optJSONObject(key);
+                if (model == null) continue;
+                long mid = model.optLong("id");
+                if (fieldMap.containsKey(mid)) model.put("flds", fieldMap.get(mid));
+                if (tmplMap.containsKey(mid)) model.put("tmpls", tmplMap.get(mid));
+            }
+            Log.i(TAG, "Schema 18: loaded " + mModels.length() + " models from notetypes table");
+        } catch (Exception e) {
+            Log.e(TAG, "Schema 18 loadModelsFromTable failed", e);
+            mModels = new JSONObject();
+        }
+    }
+
+    private int[] parseProtoVarints(byte[] proto, int[] targetFields) {
+        int[] result = new int[targetFields.length];
+        try {
+            int pos = 0;
+            while (pos < proto.length) {
+                int tag = proto[pos++] & 0xff; int fn = tag >> 3; int wt = tag & 7;
+                if (wt == 0) {
+                    long val = 0; int shift = 0;
+                    while (pos < proto.length) { int b = proto[pos++] & 0xff; val |= ((long)(b & 0x7f)) << shift; shift += 7; if ((b & 0x80) == 0) break; }
+                    for (int i = 0; i < targetFields.length; i++) { if (fn == targetFields[i]) result[i] = (int) val; }
+                } else if (wt == 2) {
+                    int len = 0; int shift = 0;
+                    while (pos < proto.length) { int b = proto[pos++] & 0xff; len |= (b & 0x7f) << shift; shift += 7; if ((b & 0x80) == 0) break; }
+                    pos += len;
+                } else if (wt == 1) { pos += 8; } else if (wt == 5) { pos += 4; } else break;
+            }
+        } catch (Exception e) { Log.w(TAG, "parseProtoVarints error", e); }
+        return result;
+    }
+
+    private String extractProtoString(byte[] proto, int targetField) {
+        try {
+            int pos = 0;
+            while (pos < proto.length) {
+                int tag = proto[pos++] & 0xff; int fn = tag >> 3; int wt = tag & 7;
+                if (wt == 0) { while (pos < proto.length && (proto[pos] & 0x80) != 0) pos++; if (pos < proto.length) pos++; }
+                else if (wt == 2) {
+                    int len = 0; int shift = 0;
+                    while (pos < proto.length) { int b = proto[pos++] & 0xff; len |= (b & 0x7f) << shift; shift += 7; if ((b & 0x80) == 0) break; }
+                    if (fn == targetField) { try { return new String(proto, pos, len, "UTF-8"); } catch (Exception ex) { return ""; } }
+                    pos += len;
+                } else if (wt == 1) { pos += 8; } else if (wt == 5) { pos += 4; } else break;
+            }
+        } catch (Exception e) { Log.w(TAG, "extractProtoString error", e); }
+        return "";
     }
 
     public long getColCrt() { return mColCrt; }
@@ -238,8 +390,11 @@ public class AnkiDatabase {
             long dayStartMs = (mColCrt + (long) todayDays() * 86400L) * 1000L;
             List<Long> ids = getDeckAndChildrenIds(did);
             String inClause = makeInClause(ids);
+            // usn = -1 means reviewed on this device (not yet synced from PC).
+            // PC-synced revlog entries have usn > 0, so we exclude them here to
+            // avoid reducing today's new-card allowance with PC study sessions.
             Cursor c = mDb.rawQuery(
-                    "SELECT COUNT(DISTINCT cid) FROM revlog WHERE id >= ? AND type = 0 AND cid IN (SELECT id FROM cards WHERE did IN (" + inClause + "))",
+                    "SELECT COUNT(DISTINCT cid) FROM revlog WHERE id >= ? AND type = 0 AND usn = -1 AND cid IN (SELECT id FROM cards WHERE did IN (" + inClause + "))",
                     new String[]{String.valueOf(dayStartMs)});
             int n = 0;
             if (c.moveToFirst()) n = c.getInt(0);
@@ -255,8 +410,9 @@ public class AnkiDatabase {
             long dayStartMs = (mColCrt + (long) todayDays() * 86400L) * 1000L;
             List<Long> ids = getDeckAndChildrenIds(did);
             String inClause = makeInClause(ids);
+            // usn = -1 means reviewed on this device only
             Cursor c = mDb.rawQuery(
-                    "SELECT COUNT(DISTINCT cid) FROM revlog WHERE id >= ? AND type IN (1, 2) AND cid IN (SELECT id FROM cards WHERE did IN (" + inClause + "))",
+                    "SELECT COUNT(DISTINCT cid) FROM revlog WHERE id >= ? AND type IN (1, 2) AND usn = -1 AND cid IN (SELECT id FROM cards WHERE did IN (" + inClause + "))",
                     new String[]{String.valueOf(dayStartMs)});
             int n = 0;
             if (c.moveToFirst()) n = c.getInt(0);
