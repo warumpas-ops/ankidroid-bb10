@@ -790,16 +790,51 @@ public class AnkiDatabase {
     }
 
     public void updateCard(Card card) {
-        mDb.execSQL(
-                "UPDATE cards SET mod=?,usn=?,type=?,queue=?,due=?,ivl=?,factor=?,reps=?,lapses=?,left=?,odue=?,odid=?,flags=? WHERE id=?",
-                new Object[]{
-                        System.currentTimeMillis() / 1000, -1,
-                        card.type, card.queue, card.due, card.ivl,
-                        card.factor, card.reps, card.lapses,
-                        card.left, card.odue, card.odid, card.flags,
-                        card.id
-                }
-        );
+        long nowSec = System.currentTimeMillis() / 1000;
+        String fsrsData = null;
+        if (card.type == Card.TYPE_REVIEW) {
+            float s = card.ivl > 0 ? (float) card.ivl : 1.0f;
+            fsrsData = "{\"s\":" + s + ",\"d\":2.0,\"dr\":0.9,\"decay\":0.154,\"lrt\":" + nowSec + "}";
+        }
+
+        try {
+            if (fsrsData != null) {
+                mDb.execSQL(
+                        "UPDATE cards SET mod=?,usn=?,type=?,queue=?,due=?,ivl=?,factor=?,reps=?,lapses=?,left=?,odue=?,odid=?,flags=?,data=? WHERE id=?",
+                        new Object[]{
+                                nowSec, -1,
+                                card.type, card.queue, card.due, card.ivl,
+                                card.factor, card.reps, card.lapses,
+                                card.left, card.odue, card.odid, card.flags,
+                                fsrsData,
+                                card.id
+                        }
+                );
+            } else {
+                mDb.execSQL(
+                        "UPDATE cards SET mod=?,usn=?,type=?,queue=?,due=?,ivl=?,factor=?,reps=?,lapses=?,left=?,odue=?,odid=?,flags=? WHERE id=?",
+                        new Object[]{
+                                nowSec, -1,
+                                card.type, card.queue, card.due, card.ivl,
+                                card.factor, card.reps, card.lapses,
+                                card.left, card.odue, card.odid, card.flags,
+                                card.id
+                        }
+                );
+            }
+        } catch (Exception e) {
+            // Fallback for older schemas without data column
+            mDb.execSQL(
+                    "UPDATE cards SET mod=?,usn=?,type=?,queue=?,due=?,ivl=?,factor=?,reps=?,lapses=?,left=?,odue=?,odid=?,flags=? WHERE id=?",
+                    new Object[]{
+                            nowSec, -1,
+                            card.type, card.queue, card.due, card.ivl,
+                            card.factor, card.reps, card.lapses,
+                            card.left, card.odue, card.odid, card.flags,
+                            card.id
+                    }
+            );
+        }
         touchCol();
     }
 
@@ -1089,10 +1124,29 @@ public class AnkiDatabase {
 
             // Apply cards
             for (PendingCardUpdate cu : pc.cards) {
-                mDb.execSQL(
-                    "UPDATE cards SET mod=?, usn=?, type=?, queue=?, due=?, ivl=?, factor=?, reps=?, lapses=?, left=?, odue=?, odid=?, flags=? WHERE id=?",
-                    new Object[]{nowSec, usn, cu.type, cu.queue, cu.due, cu.ivl, cu.factor, cu.reps, cu.lapses, cu.left, cu.odue, cu.odid, cu.flags, cu.id}
-                );
+                String fsrsData = null;
+                if (cu.type == Card.TYPE_REVIEW) {
+                    float s = cu.ivl > 0 ? (float) cu.ivl : 1.0f;
+                    fsrsData = "{\"s\":" + s + ",\"d\":2.0,\"dr\":0.9,\"decay\":0.154,\"lrt\":" + nowSec + "}";
+                }
+                try {
+                    if (fsrsData != null) {
+                        mDb.execSQL(
+                            "UPDATE cards SET mod=?, usn=?, type=?, queue=?, due=?, ivl=?, factor=?, reps=?, lapses=?, left=?, odue=?, odid=?, flags=?, data=? WHERE id=?",
+                            new Object[]{nowSec, usn, cu.type, cu.queue, cu.due, cu.ivl, cu.factor, cu.reps, cu.lapses, cu.left, cu.odue, cu.odid, cu.flags, fsrsData, cu.id}
+                        );
+                    } else {
+                        mDb.execSQL(
+                            "UPDATE cards SET mod=?, usn=?, type=?, queue=?, due=?, ivl=?, factor=?, reps=?, lapses=?, left=?, odue=?, odid=?, flags=? WHERE id=?",
+                            new Object[]{nowSec, usn, cu.type, cu.queue, cu.due, cu.ivl, cu.factor, cu.reps, cu.lapses, cu.left, cu.odue, cu.odid, cu.flags, cu.id}
+                        );
+                    }
+                } catch (Exception ignored) {
+                    mDb.execSQL(
+                        "UPDATE cards SET mod=?, usn=?, type=?, queue=?, due=?, ivl=?, factor=?, reps=?, lapses=?, left=?, odue=?, odid=?, flags=? WHERE id=?",
+                        new Object[]{nowSec, usn, cu.type, cu.queue, cu.due, cu.ivl, cu.factor, cu.reps, cu.lapses, cu.left, cu.odue, cu.odid, cu.flags, cu.id}
+                    );
+                }
             }
 
             // Apply revlogs
