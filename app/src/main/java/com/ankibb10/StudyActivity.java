@@ -220,7 +220,10 @@ public class StudyActivity extends Activity {
             } catch (Exception ignored) {}
             mediaPlayer = null;
         }
-        if (db != null) db.close();
+        if (db != null) {
+            try { db.close(); } catch (Exception ignored) {}
+            db = null;
+        }
         SyncManager sm = new SyncManager(this);
         if (sm.isLoggedIn()) {
             sm.autoSync(null);
@@ -266,9 +269,12 @@ public class StudyActivity extends Activity {
                 if (llBackRatings != null) llBackRatings.setVisibility(View.GONE);
                 if (tvBadgeNew != null) tvBadgeNew.setText("0");
                 if (tvBadgeLearn != null) tvBadgeLearn.setText("0");
-                if (tvBadgeReview != null) tvBadgeReview.setText("0");
                 if (layoutDone != null) layoutDone.setVisibility(View.VISIBLE);
                 if (btnAudio != null) btnAudio.setVisibility(View.GONE);
+                if (db != null) {
+                    try { db.close(); } catch (Exception ignored) {}
+                    db = null;
+                }
 
                 SyncManager sm = new SyncManager(this);
                 if (sm.isLoggedIn()) {
@@ -381,7 +387,7 @@ public class StudyActivity extends Activity {
                 scheduler.answerCard(currentCard, ease, timeTaken);
             }
 
-            if (ease == Scheduler.EASE_AGAIN) {
+            if (ease == Scheduler.EASE_AGAIN || currentCard.queue == Card.QUEUE_LEARN) {
                 cardQueue.add(currentCard);
             }
 

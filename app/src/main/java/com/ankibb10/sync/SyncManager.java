@@ -193,7 +193,7 @@ public class SyncManager {
                 // Step 2: Merge the local offline reviews into the freshly downloaded collection
                 try {
                     AnkiDatabase serverDb = new AnkiDatabase(tempPath);
-                    serverDb.applyPendingChanges(pending, serverUsn + 1);
+                    serverDb.applyPendingChanges(pending, serverUsn + 1, normServerMod);
                     serverDb.close();
                 } catch (Exception e) {
                     Log.e(TAG, "Error applying pending changes to downloaded collection", e);
@@ -225,7 +225,7 @@ public class SyncManager {
                 listener.onProgress("Preparing collection for AnkiWeb...");
                 try {
                     AnkiDatabase localDb = new AnkiDatabase(dbPath);
-                    localDb.prepareForUpload(serverUsn > 0 ? serverUsn : 1);
+                    localDb.prepareForUpload(serverUsn > 0 ? serverUsn : 1, normServerMod);
                     localDb.close();
                 } catch (Exception e) {
                     Log.e(TAG, "Error preparing upload", e);

@@ -165,10 +165,10 @@ public class DeckListActivity extends Activity {
             lvDecks.setVisibility(View.GONE);
             return;
         }
-        if (ankiDb != null) ankiDb.close();
         try {
-            ankiDb = new AnkiDatabase(syncManager.getDbPath());
-            rawDecks = ankiDb.getDecks();
+            AnkiDatabase db = new AnkiDatabase(syncManager.getDbPath());
+            rawDecks = db.getDecks();
+            db.close();
         } catch (Exception e) {
             Log.e(TAG, "Failed to open collection", e);
             Toast.makeText(this, "Could not open collection: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -359,13 +359,17 @@ public class DeckListActivity extends Activity {
                 String front = etFront.getText().toString().trim();
                 String back = etBack.getText().toString().trim();
                 if (!front.isEmpty()) {
-                    if (ankiDb != null) {
-                        ankiDb.addNote(targetDeck.id, front, back);
+                    try {
+                        AnkiDatabase db = new AnkiDatabase(syncManager.getDbPath());
+                        db.addNote(targetDeck.id, front, back);
+                        db.close();
                         Toast.makeText(DeckListActivity.this, "Note added", Toast.LENGTH_SHORT).show();
                         loadDecks();
                         if (syncManager != null && syncManager.isLoggedIn() && syncManager.isNetworkAvailable()) {
                             syncManager.autoSync(null);
                         }
+                    } catch (Exception e) {
+                        Log.e(TAG, "addNote error", e);
                     }
                 }
             }
@@ -391,13 +395,17 @@ public class DeckListActivity extends Activity {
             public void onClick(DialogInterface dialog, int which) {
                 String name = etName.getText().toString().trim();
                 if (!name.isEmpty()) {
-                    if (ankiDb != null) {
-                        ankiDb.createDeck(name);
+                    try {
+                        AnkiDatabase db = new AnkiDatabase(syncManager.getDbPath());
+                        db.createDeck(name);
+                        db.close();
                         Toast.makeText(DeckListActivity.this, "Deck created", Toast.LENGTH_SHORT).show();
                         loadDecks();
                         if (syncManager != null && syncManager.isLoggedIn() && syncManager.isNetworkAvailable()) {
                             syncManager.autoSync(null);
                         }
+                    } catch (Exception e) {
+                        Log.e(TAG, "createDeck error", e);
                     }
                 }
             }

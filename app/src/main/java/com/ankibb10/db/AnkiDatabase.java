@@ -32,6 +32,10 @@ public class AnkiDatabase {
 
     public AnkiDatabase(String path) {
         mDb = SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READWRITE);
+        try {
+            mDb.execSQL("PRAGMA journal_mode = DELETE");
+            mDb.execSQL("PRAGMA synchronous = NORMAL");
+        } catch (Exception ignored) {}
         loadCol();
     }
 
@@ -737,16 +741,17 @@ public class AnkiDatabase {
         }
     }
 
-    public void prepareForUpload(int targetUsn) {
+    public void prepareForUpload(int targetUsn, long serverMod) {
         if (mDb == null || !mDb.isOpen()) return;
         int usn = targetUsn > 0 ? targetUsn : 1;
         long nowSec = System.currentTimeMillis() / 1000L;
+        long uploadMod = Math.max(nowSec, serverMod + 1);
         try {
             mDb.beginTransaction();
             mDb.execSQL("UPDATE cards SET usn=? WHERE usn=-1", new Object[]{usn});
             mDb.execSQL("UPDATE notes SET usn=? WHERE usn=-1", new Object[]{usn});
             mDb.execSQL("UPDATE revlog SET usn=? WHERE usn=-1", new Object[]{usn});
-            mDb.execSQL("UPDATE col SET usn=?, mod=?, ls=?", new Object[]{usn, nowSec, nowSec});
+            mDb.execSQL("UPDATE col SET usn=?, mod=?, ls=?", new Object[]{usn, uploadMod, uploadMod});
             mDb.setTransactionSuccessful();
         } catch (Exception e) {
             Log.e(TAG, "prepareForUpload error", e);
@@ -754,6 +759,10 @@ public class AnkiDatabase {
             try { mDb.endTransaction(); } catch (Exception ignored) {}
         }
         checkpointWal();
+    }
+
+    public void prepareForUpload(int targetUsn) {
+        prepareForUpload(targetUsn, 0);
     }
 
     public void markAllSynced() {
@@ -864,11 +873,11 @@ public class AnkiDatabase {
         return pc;
     }
 
-    public void applyPendingChanges(PendingChanges pc, int targetUsn) {
+    public void applyPendingChanges(PendingChanges pc, int targetUsn, long serverMod) {
         if (mDb == null || !mDb.isOpen() || pc == null || pc.isEmpty()) return;
         int usn = targetUsn > 0 ? targetUsn : 1;
         long nowSec = System.currentTimeMillis() / 1000;
-        long nowMs = System.currentTimeMillis();
+        long uploadMod = Math.max(nowSec, serverMod + 1);
 
         mDb.beginTransaction();
         try {
@@ -898,7 +907,7 @@ public class AnkiDatabase {
             }
 
             // Update collection timestamp & sequence number
-            mDb.execSQL("UPDATE col SET mod=?, usn=?, ls=?", new Object[]{nowSec, usn, nowSec});
+            mDb.execSQL("UPDATE col SET mod=?, usn=?, ls=?", new Object[]{uploadMod, usn, uploadMod});
             mDb.setTransactionSuccessful();
         } catch (Exception e) {
             Log.e(TAG, "applyPendingChanges error", e);
@@ -906,6 +915,10 @@ public class AnkiDatabase {
             try { mDb.endTransaction(); } catch (Exception ignored) {}
         }
         checkpointWal();
+    }
+
+    public void applyPendingChanges(PendingChanges pc, int targetUsn) {
+        applyPendingChanges(pc, targetUsn, 0);
     }
 
     public long getColMod() {
