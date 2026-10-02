@@ -186,7 +186,7 @@ public class SyncManager {
             long normLocalMod  = localMod > 100000000000L ? (localMod / 1000L) : localMod;
             long normServerMod = serverMod > 100000000000L ? (serverMod / 1000L) : serverMod;
             boolean serverNewer = (normServerMod > normLocalMod)
-                    || (serverUsn > localUsn)
+                    || (serverUsn > localUsn && localUsn >= 0)
                     || (serverScm > 0 && localScm > 0 && serverScm != localScm)
                     || (!hasLocalChanges && (normServerMod != normLocalMod || serverUsn != localUsn));
             Log.i(TAG, "Sync check: hasLocalChanges=" + hasLocalChanges + ", localUsn=" + localUsn + ", serverUsn=" + serverUsn + ", normLocalMod=" + normLocalMod + ", normServerMod=" + normServerMod + ", serverNewer=" + serverNewer);

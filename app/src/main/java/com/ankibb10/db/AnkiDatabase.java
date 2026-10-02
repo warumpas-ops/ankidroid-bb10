@@ -886,8 +886,8 @@ public class AnkiDatabase {
     }
 
     private void touchCol() {
-        long nowSec = System.currentTimeMillis() / 1000L;
-        mDb.execSQL("UPDATE col SET mod=?, usn=-1", new Object[]{nowSec});
+        long nowMs = System.currentTimeMillis();
+        mDb.execSQL("UPDATE col SET mod=?, usn=-1", new Object[]{nowMs});
     }
 
     public boolean hasUnsyncedChanges() {
@@ -938,8 +938,9 @@ public class AnkiDatabase {
     public void prepareForUpload(int targetUsn, long serverMod) {
         if (mDb == null || !mDb.isOpen()) return;
         int usn = targetUsn > 0 ? targetUsn : 1;
-        long nowSec = System.currentTimeMillis() / 1000L;
-        long uploadMod = Math.max(nowSec, serverMod + 1);
+        long nowMs = System.currentTimeMillis();
+        long sModMs = serverMod > 100000000000L ? serverMod : (serverMod * 1000L);
+        long uploadMod = Math.max(nowMs, sModMs + 1000L);
         try {
             mDb.beginTransaction();
             mDb.execSQL("UPDATE cards SET usn=? WHERE usn=-1", new Object[]{usn});
@@ -1070,8 +1071,10 @@ public class AnkiDatabase {
     public void applyPendingChanges(PendingChanges pc, int targetUsn, long serverMod) {
         if (mDb == null || !mDb.isOpen() || pc == null || pc.isEmpty()) return;
         int usn = targetUsn > 0 ? targetUsn : 1;
-        long nowSec = System.currentTimeMillis() / 1000;
-        long uploadMod = Math.max(nowSec, serverMod + 1);
+        long nowMs = System.currentTimeMillis();
+        long sModMs = serverMod > 100000000000L ? serverMod : (serverMod * 1000L);
+        long uploadMod = Math.max(nowMs, sModMs + 1000L);
+        long nowSec = nowMs / 1000L;
 
         mDb.beginTransaction();
         try {
