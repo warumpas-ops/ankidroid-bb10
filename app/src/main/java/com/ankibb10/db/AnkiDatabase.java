@@ -390,11 +390,11 @@ public class AnkiDatabase {
             long dayStartMs = (mColCrt + (long) todayDays() * 86400L) * 1000L;
             List<Long> ids = getDeckAndChildrenIds(did);
             String inClause = makeInClause(ids);
-            // Count ALL new-card reviews today (including from PC after sync).
-            // This mirrors Anki's behaviour: if PC studied 20 cards and you synced,
-            // the phone shows 0 remaining because those 20 reviews are in revlog.
+            // Only count cards that have actually transitioned out of queue=0.
+            // If cards were reset to new (queue=0), they are waiting to be studied
+            // and must not consume today's new card quota.
             Cursor c = mDb.rawQuery(
-                    "SELECT COUNT(DISTINCT cid) FROM revlog WHERE id >= ? AND type = 0 AND cid IN (SELECT id FROM cards WHERE did IN (" + inClause + "))",
+                    "SELECT COUNT(DISTINCT cid) FROM revlog WHERE id >= ? AND type = 0 AND cid IN (SELECT id FROM cards WHERE did IN (" + inClause + ") AND queue != 0)",
                     new String[]{String.valueOf(dayStartMs)});
             int n = 0;
             if (c.moveToFirst()) n = c.getInt(0);
@@ -411,7 +411,7 @@ public class AnkiDatabase {
             List<Long> ids = getDeckAndChildrenIds(did);
             String inClause = makeInClause(ids);
             Cursor c = mDb.rawQuery(
-                    "SELECT COUNT(DISTINCT cid) FROM revlog WHERE id >= ? AND type IN (1, 2) AND cid IN (SELECT id FROM cards WHERE did IN (" + inClause + "))",
+                    "SELECT COUNT(DISTINCT cid) FROM revlog WHERE id >= ? AND type IN (1, 2) AND cid IN (SELECT id FROM cards WHERE did IN (" + inClause + ") AND type != 0)",
                     new String[]{String.valueOf(dayStartMs)});
             int n = 0;
             if (c.moveToFirst()) n = c.getInt(0);
