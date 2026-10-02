@@ -156,68 +156,6 @@ public class AnkiDatabase {
         return cfg;
     }
 
-    public boolean updateDeckConf(long deckId, int newPerDay, int maxReviews, String learnStepsStr) {
-        if (mDb == null || !mDb.isOpen()) return false;
-        try {
-            JSONObject deck = mDecks != null ? mDecks.optJSONObject(String.valueOf(deckId)) : null;
-            long confId = deck != null ? deck.optLong("conf", 1) : 1;
-            JSONObject dconf = mDconf != null ? mDconf.optJSONObject(String.valueOf(confId)) : null;
-
-            if (dconf != null) {
-                JSONObject newObj = dconf.optJSONObject("new");
-                if (newObj == null) {
-                    newObj = new JSONObject();
-                    dconf.put("new", newObj);
-                }
-                newObj.put("perDay", newPerDay);
-
-                if (learnStepsStr != null && !learnStepsStr.trim().isEmpty()) {
-                    String[] parts = learnStepsStr.trim().split("\\s+");
-                    JSONArray delays = new JSONArray();
-                    for (String p : parts) {
-                        try {
-                            double val = Double.parseDouble(p);
-                            if (val > 0) delays.put(val);
-                        } catch (NumberFormatException ignored) {}
-                    }
-                    if (delays.length() > 0) {
-                        newObj.put("delays", delays);
-                    }
-                }
-
-                JSONObject revObj = dconf.optJSONObject("rev");
-                if (revObj == null) {
-                    revObj = new JSONObject();
-                    dconf.put("rev", revObj);
-                }
-                revObj.put("perDay", maxReviews);
-            }
-
-            if (deck != null) {
-                deck.put("newPerDay", newPerDay);
-                deck.put("perDay", newPerDay);
-                deck.put("extendNew", 0);
-                JSONObject deckNew = deck.optJSONObject("new");
-                if (deckNew != null) deckNew.put("perDay", newPerDay);
-
-                deck.put("revPerDay", maxReviews);
-                deck.put("extendRev", 0);
-                JSONObject deckRev = deck.optJSONObject("rev");
-                if (deckRev != null) deckRev.put("perDay", maxReviews);
-            }
-
-            long nowSec = System.currentTimeMillis() / 1000L;
-            mDb.execSQL("UPDATE col SET dconf=?, decks=?, mod=?, usn=-1 WHERE id=1",
-                    new Object[]{mDconf.toString(), mDecks.toString(), nowSec});
-
-            Log.i(TAG, "Deck options updated for deck " + deckId + ": newPerDay=" + newPerDay + ", maxReviews=" + maxReviews);
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to update deck config", e);
-            return false;
-        }
-    }
-
     public List<Long> getDeckAndChildrenIds(long did) {
         List<Long> ids = new ArrayList<Long>();
         ids.add(did);

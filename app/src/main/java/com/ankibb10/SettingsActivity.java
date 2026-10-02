@@ -24,6 +24,9 @@ public class SettingsActivity extends Activity {
     private EditText etSyncUrl;
     private Button   btnSave;
 
+    private View rowTheme;
+    private TextView tvValTheme;
+
     private View rowShowAnswer, rowAgain, rowHard, rowGood, rowEasy;
     private TextView tvShowAnswer, tvAgain, tvHard, tvGood, tvEasy;
     private Button btnResetKeys;
@@ -41,6 +44,17 @@ public class SettingsActivity extends Activity {
         btnBack   = (ImageButton) findViewById(R.id.btn_settings_back);
         etSyncUrl = (EditText)   findViewById(R.id.et_sync_url);
         btnSave   = (Button)     findViewById(R.id.btn_save);
+
+        rowTheme   = findViewById(R.id.row_theme);
+        tvValTheme = (TextView) findViewById(R.id.tv_val_theme);
+        if (tvValTheme != null) {
+            tvValTheme.setText(ThemeManager.getThemeDisplayName(this));
+        }
+        if (rowTheme != null) {
+            rowTheme.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) { promptTheme(); }
+            });
+        }
 
         rowShowAnswer = findViewById(R.id.row_key_show_answer);
         rowAgain      = findViewById(R.id.row_key_again);
@@ -61,6 +75,8 @@ public class SettingsActivity extends Activity {
                 public void onClick(View v) { finish(); }
             });
         }
+
+        applyTheme();
 
         // Sync URL
         SharedPreferences prefs = getSharedPreferences(SyncManager.PREFS, MODE_PRIVATE);
@@ -262,5 +278,43 @@ public class SettingsActivity extends Activity {
     private int dp(int dp) {
         float density = getResources().getDisplayMetrics().density;
         return Math.round(dp * density);
+    }
+
+    private void promptTheme() {
+        final String[] themes = {"Black (OLED / Pitch Black)", "Plain Dark", "Light"};
+        final String[] themeKeys = {ThemeManager.THEME_BLACK, ThemeManager.THEME_DARK, ThemeManager.THEME_LIGHT};
+        String current = ThemeManager.getTheme(this);
+        int selectedIndex = 0;
+        for (int i = 0; i < themeKeys.length; i++) {
+            if (themeKeys[i].equals(current)) {
+                selectedIndex = i;
+                break;
+            }
+        }
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Select Theme")
+                .setSingleChoiceItems(themes, selectedIndex, new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                        ThemeManager.setTheme(SettingsActivity.this, themeKeys[which]);
+                        if (tvValTheme != null) {
+                            tvValTheme.setText(themes[which]);
+                        }
+                        applyTheme();
+                        Toast.makeText(SettingsActivity.this, "Theme set to " + themes[which], Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void applyTheme() {
+        int bg = ThemeManager.getBackgroundColor(this);
+        int toolbar = ThemeManager.getToolbarColor(this);
+        View root = findViewById(R.id.root_settings);
+        if (root != null) root.setBackgroundColor(bg);
+        View tb = findViewById(R.id.ll_settings_toolbar);
+        if (tb != null) tb.setBackgroundColor(toolbar);
     }
 }

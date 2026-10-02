@@ -178,6 +178,7 @@ public class StudyActivity extends Activity {
 
             loadKeyMappings();
             setupButtons();
+            applyTheme();
             showNextCard();
 
         } catch (Throwable t) {
@@ -294,19 +295,37 @@ public class StudyActivity extends Activity {
         }
     }
 
+    private void applyTheme() {
+        int bg = ThemeManager.getBackgroundColor(this);
+        int toolbar = ThemeManager.getToolbarColor(this);
+        View root = findViewById(R.id.root_study);
+        if (root != null) root.setBackgroundColor(bg);
+        View header = findViewById(R.id.ll_study_progress);
+        if (header != null) header.setBackgroundColor(toolbar);
+        if (tvDeckName != null) tvDeckName.setTextColor(ThemeManager.getPrimaryTextColor(this));
+        if (wvCard != null) {
+            wvCard.setBackgroundColor(bg);
+        }
+        if (layoutDone != null) {
+            layoutDone.setBackgroundColor(bg);
+        }
+    }
+
     private void showFront() {
         if (wvCard != null) wvCard.setVisibility(View.VISIBLE);
         if (layoutDone != null) layoutDone.setVisibility(View.GONE);
         if (llFrontAnswer != null) llFrontAnswer.setVisibility(View.VISIBLE);
         if (llBackRatings != null) llBackRatings.setVisibility(View.GONE);
 
-        String html = currentCard != null && currentCard.frontHtml != null ? currentCard.frontHtml : "<html><body><div class='card'>No Content</div></body></html>";
+        String rawHtml = currentCard != null && currentCard.frontHtml != null ? currentCard.frontHtml : "<html><body><div class='card'>No Content</div></body></html>";
+        String css = ThemeManager.getCardCss(this);
+        String html = "<style>" + css + "</style>" + rawHtml;
         if (wvCard != null) {
             File mediaDir = new File(getFilesDir(), "collection.media");
             wvCard.loadDataWithBaseURL("file://" + mediaDir.getAbsolutePath() + "/", html, "text/html", "UTF-8", null);
         }
 
-        currentCardSounds = extractSoundFiles(html);
+        currentCardSounds = extractSoundFiles(rawHtml);
         if (btnAudio != null) {
             btnAudio.setVisibility(!currentCardSounds.isEmpty() ? View.VISIBLE : View.GONE);
         }
@@ -328,13 +347,15 @@ public class StudyActivity extends Activity {
             if (tvIvlEasy != null) tvIvlEasy.setText(intervals[3]);
         }
 
-        String html = currentCard != null && currentCard.backHtml != null ? currentCard.backHtml : "<html><body><div class='card'>No Content</div></body></html>";
+        String rawHtml = currentCard != null && currentCard.backHtml != null ? currentCard.backHtml : "<html><body><div class='card'>No Content</div></body></html>";
+        String css = ThemeManager.getCardCss(this);
+        String html = "<style>" + css + "</style>" + rawHtml;
         if (wvCard != null) {
             File mediaDir = new File(getFilesDir(), "collection.media");
             wvCard.loadDataWithBaseURL("file://" + mediaDir.getAbsolutePath() + "/", html, "text/html", "UTF-8", null);
         }
 
-        List<String> backSounds = extractSoundFiles(html);
+        List<String> backSounds = extractSoundFiles(rawHtml);
         if (!backSounds.isEmpty()) {
             currentCardSounds = backSounds;
             if (btnAudio != null) btnAudio.setVisibility(View.VISIBLE);
