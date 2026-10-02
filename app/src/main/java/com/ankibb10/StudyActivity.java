@@ -212,6 +212,22 @@ public class StudyActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        // Close db first so WAL is fully checkpointed into the main .anki2 file
+        // before sync reads and uploads it. Uploading with an open db would send
+        // a stale file that is missing the card queue state changes from this session.
+        if (db != null) {
+            try { db.close(); } catch (Exception ignored) {}
+            db = null;
+        }
+        SyncManager sm = new SyncManager(this);
+        if (sm.isLoggedIn() && sm.isNetworkAvailable()) {
+            sm.autoSync(null);
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
         if (mediaPlayer != null) {
@@ -224,10 +240,6 @@ public class StudyActivity extends Activity {
         if (db != null) {
             try { db.close(); } catch (Exception ignored) {}
             db = null;
-        }
-        SyncManager sm = new SyncManager(this);
-        if (sm.isLoggedIn()) {
-            sm.autoSync(null);
         }
     }
 
@@ -277,10 +289,8 @@ public class StudyActivity extends Activity {
                     db = null;
                 }
 
-                SyncManager sm = new SyncManager(this);
-                if (sm.isLoggedIn()) {
-                    sm.autoSync(null);
-                }
+                // NOTE: do NOT sync here — db must be fully closed and WAL
+                // checkpointed first. onDestroy() handles the sync after close.
                 return;
             }
 
