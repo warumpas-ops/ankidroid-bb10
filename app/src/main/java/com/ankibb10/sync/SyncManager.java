@@ -241,7 +241,19 @@ public class SyncManager {
                 }
 
                 listener.onProgress("Uploading study activity to AnkiWeb...");
-                client.uploadCollection(dbPath);
+                try {
+                    client.uploadCollection(dbPath);
+                } catch (Exception e) {
+                    if (e.getMessage() != null && e.getMessage().contains("SESSION_EXPIRED") && username != null && password != null && !password.isEmpty()) {
+                        listener.onProgress("Refreshing session and retrying upload...");
+                        hkey = client.authenticate(username, password);
+                        prefs.edit().putString(KEY_HOSTKEY, hkey).commit();
+                        client.setHostKey(hkey);
+                        client.uploadCollection(dbPath);
+                    } else {
+                        throw e;
+                    }
+                }
 
                 prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
                 listener.onSuccess("Synced: all study activity uploaded to AnkiWeb!");
@@ -339,6 +351,81 @@ public class SyncManager {
                 } catch (Exception e) {
                     Log.e(TAG, "Force download failed", e);
                     if (listener != null) listener.onError("Download failed: " + e.getMessage());
+                } finally {
+                    sIsSyncing.set(false);
+                }
+            }
+        }).start();
+    }
+
+    public void forceUpload(final SyncListener listener) {
+        if (!isLoggedIn()) {
+            if (listener != null) listener.onError("Not logged in");
+            return;
+        }
+        if (!isNetworkAvailable()) {
+            if (listener != null) listener.onError("No network available");
+            return;
+        }
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    sIsSyncing.set(true);
+                    if (listener != null) listener.onProgress("Connecting to AnkiWeb...");
+                    SharedPreferences prefs = mContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                    String hkey     = prefs.getString(KEY_HOSTKEY, null);
+                    String username = prefs.getString(KEY_USER, null);
+                    String password = prefs.getString(KEY_PASS, null);
+                    String syncUrl  = prefs.getString(KEY_SYNCURL, DEFAULT_URL);
+                    String dbPath   = getDbPath();
+
+                    AnkiWebSyncClient client = new AnkiWebSyncClient(syncUrl);
+                    client.setHostKey(hkey);
+
+                    // Always re-auth to ensure fresh session key before upload
+                    if (listener != null) listener.onProgress("Authenticating with AnkiWeb...");
+                    try {
+                        client.getMeta();
+                    } catch (Exception e) {
+                        if (username != null && password != null && !password.isEmpty()) {
+                            hkey = client.authenticate(username, password);
+                            prefs.edit().putString(KEY_HOSTKEY, hkey).commit();
+                            client.setHostKey(hkey);
+                        } else {
+                            throw e;
+                        }
+                    }
+
+                    // Checkpoint WAL — merge all pending writes into main .anki2 file
+                    if (listener != null) listener.onProgress("Preparing collection for upload...");
+                    try {
+                        AnkiDatabase db = new AnkiDatabase(dbPath);
+                        int serverUsn = 1;
+                        try {
+                            org.json.JSONObject meta = client.getMeta();
+                            serverUsn = meta.optInt("usn", 1);
+                            long serverMod = meta.optLong("mod", 0);
+                            db.prepareForUpload(serverUsn > 0 ? serverUsn : 1, serverMod);
+                        } catch (Exception ignored) {
+                            db.prepareForUpload(1, 0);
+                        }
+                        db.close();
+                    } catch (Exception e) {
+                        Log.e(TAG, "prepareForUpload error in forceUpload", e);
+                    }
+
+                    if (listener != null) listener.onProgress("Uploading collection to AnkiWeb...");
+                    client.uploadCollection(dbPath);
+                    prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
+                    if (listener != null) listener.onSuccess("Upload complete! Your study progress is now on AnkiWeb.\nNow sync on your laptop and click 'Download from AnkiWeb'.");
+                } catch (Exception e) {
+                    Log.e(TAG, "Force upload failed", e);
+                    String msg = e.getMessage();
+                    if (msg != null && msg.contains("SESSION_EXPIRED")) {
+                        if (listener != null) listener.onError("SESSION_EXPIRED: " + msg);
+                    } else {
+                        if (listener != null) listener.onError("Upload failed: " + (msg != null ? msg : e.toString()));
+                    }
                 } finally {
                     sIsSyncing.set(false);
                 }

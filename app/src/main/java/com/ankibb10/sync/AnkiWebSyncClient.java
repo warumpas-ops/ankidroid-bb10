@@ -279,13 +279,34 @@ public class AnkiWebSyncClient {
         int code = conn.getResponseCode();
         Log.i(TAG, "Upload response code: " + code);
 
+        if (code == 403) {
+            conn.disconnect();
+            throw new Exception("SESSION_EXPIRED: AnkiWeb session expired. Please reconnect your account.");
+        }
+
         if (code != 200) {
             String err = tryReadError(conn);
             conn.disconnect();
             throw new Exception("Upload failed (HTTP " + code + "): " + err);
         }
+
+        // AnkiWeb returns HTTP 200 even for errors — must check the response body
+        String respBody = "";
+        try {
+            respBody = readString(conn.getInputStream()).trim();
+        } catch (Exception ignored) {}
         conn.disconnect();
-        Log.i(TAG, "Collection upload completed successfully (" + dbFile.length() + " bytes)");
+
+        Log.i(TAG, "Upload response body: " + respBody);
+
+        if ("hostKey".equalsIgnoreCase(respBody) || "forbidden".equalsIgnoreCase(respBody)) {
+            throw new Exception("SESSION_EXPIRED: AnkiWeb session expired. Please reconnect your account.");
+        }
+        if (respBody.toLowerCase().startsWith("error")) {
+            throw new Exception("Upload rejected by AnkiWeb: " + respBody);
+        }
+        // "OK" = success; any other non-empty unexpected body → log but continue
+        Log.i(TAG, "Collection upload completed successfully (" + dbFile.length() + " bytes), response: " + respBody);
     }
 
     private HttpURLConnection openConnection(String url, String method) throws IOException {

@@ -126,7 +126,7 @@ public class DeckListActivity extends Activity {
     }
 
     private void showOverflowMenu() {
-        final CharSequence[] items = {"Add Note", "Create Deck", "Import .apkg", "Theme", "AnkiWeb Account", "Force Download from AnkiWeb", "Settings", "Log Out"};
+        final CharSequence[] items = {"Add Note", "Create Deck", "Import .apkg", "Theme", "AnkiWeb Account", "Force Upload to AnkiWeb", "Force Download from AnkiWeb", "Settings", "Log Out"};
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("AnkiDroid");
         builder.setItems(items, new DialogInterface.OnClickListener() {
@@ -142,15 +142,74 @@ public class DeckListActivity extends Activity {
                 } else if (which == 4) {
                     showAccountDialog();
                 } else if (which == 5) {
-                    confirmForceDownload();
+                    confirmForceUpload();
                 } else if (which == 6) {
-                    startActivity(new Intent(DeckListActivity.this, SettingsActivity.class));
+                    confirmForceDownload();
                 } else if (which == 7) {
+                    startActivity(new Intent(DeckListActivity.this, SettingsActivity.class));
+                } else if (which == 8) {
                     confirmLogout();
                 }
             }
         });
         builder.show();
+    }
+
+    private void confirmForceUpload() {
+        new AlertDialog.Builder(this)
+                .setTitle("Force Upload")
+                .setMessage("Upload your phone's study progress to AnkiWeb?\n\nThis will send your completed cards directly to AnkiWeb.\n\nAfter uploading, click Sync on your PC and choose 'Download from AnkiWeb' to see 0 on your PC.")
+                .setPositiveButton("Upload", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int which) {
+                        if (ankiDb != null) {
+                            try { ankiDb.close(); } catch (Exception ignored) {}
+                            ankiDb = null;
+                        }
+                        final android.app.ProgressDialog pd = new android.app.ProgressDialog(DeckListActivity.this);
+                        pd.setMessage("Uploading to AnkiWeb...");
+                        pd.setCancelable(false);
+                        pd.show();
+
+                        syncManager.forceUpload(new SyncManager.SyncListener() {
+                            public void onProgress(final String msg) {
+                                runOnUiThread(new Runnable() {
+                                    public void run() { if (pd.isShowing()) pd.setMessage(msg); }
+                                });
+                            }
+                            public void onSuccess(final String msg) {
+                                runOnUiThread(new Runnable() {
+                                    public void run() {
+                                        if (pd.isShowing()) {
+                                            try { pd.dismiss(); } catch (Exception ignored) {}
+                                        }
+                                        new AlertDialog.Builder(DeckListActivity.this)
+                                                .setTitle("Upload Complete")
+                                                .setMessage(msg)
+                                                .setPositiveButton("OK", null)
+                                                .show();
+                                        loadDecks();
+                                    }
+                                });
+                            }
+                            public void onError(final String error) {
+                                runOnUiThread(new Runnable() {
+                                    public void run() {
+                                        if (pd.isShowing()) {
+                                            try { pd.dismiss(); } catch (Exception ignored) {}
+                                        }
+                                        new AlertDialog.Builder(DeckListActivity.this)
+                                                .setTitle("Upload Failed")
+                                                .setMessage(error)
+                                                .setPositiveButton("OK", null)
+                                                .show();
+                                    }
+                                });
+                            }
+                        });
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void showThemePicker() {
