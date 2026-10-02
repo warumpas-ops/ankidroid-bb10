@@ -86,6 +86,19 @@ public class DeckListActivity extends Activity {
             }
         });
 
+        lvDecks.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
+            public boolean onItemLongClick(AdapterView<?> parent, View view, int pos, long id) {
+                if (pos >= 0 && pos < visibleNodes.size()) {
+                    DeckNode node = visibleNodes.get(pos);
+                    if (node.deck != null) {
+                        showDeckContextMenu(node.deck);
+                        return true;
+                    }
+                }
+                return false;
+            }
+        });
+
         fabAdd.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 showAddActionDialog();
@@ -110,7 +123,7 @@ public class DeckListActivity extends Activity {
     }
 
     private void showOverflowMenu() {
-        final CharSequence[] items = {"Add Note", "Create Deck", "Import .apkg", "AnkiWeb Account", "Force Download from AnkiWeb", "Settings", "Log Out"};
+        final CharSequence[] items = {"Add Note", "Create Deck", "Deck Options", "Import .apkg", "AnkiWeb Account", "Force Download from AnkiWeb", "Settings", "Log Out"};
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("AnkiDroid");
         builder.setItems(items, new DialogInterface.OnClickListener() {
@@ -120,18 +133,136 @@ public class DeckListActivity extends Activity {
                 } else if (which == 1) {
                     showCreateDeckDialog();
                 } else if (which == 2) {
-                    pickApkg();
+                    if (!rawDecks.isEmpty()) {
+                        showDeckOptionsDialog(rawDecks.get(0));
+                    } else {
+                        Toast.makeText(DeckListActivity.this, "No decks available", Toast.LENGTH_SHORT).show();
+                    }
                 } else if (which == 3) {
-                    showAccountDialog();
+                    pickApkg();
                 } else if (which == 4) {
-                    confirmForceDownload();
+                    showAccountDialog();
                 } else if (which == 5) {
-                    startActivity(new Intent(DeckListActivity.this, SettingsActivity.class));
+                    confirmForceDownload();
                 } else if (which == 6) {
+                    startActivity(new Intent(DeckListActivity.this, SettingsActivity.class));
+                } else if (which == 7) {
                     confirmLogout();
                 }
             }
         });
+        builder.show();
+    }
+
+    private void showDeckContextMenu(final Deck deck) {
+        final CharSequence[] items = {"Study", "Deck Options (Daily Limits)", "Add Note to this Deck"};
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle(deck.name);
+        builder.setItems(items, new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int which) {
+                if (which == 0) {
+                    startStudy(deck);
+                } else if (which == 1) {
+                    showDeckOptionsDialog(deck);
+                } else if (which == 2) {
+                    showAddNoteDialog(deck);
+                }
+            }
+        });
+        builder.show();
+    }
+
+    private void showDeckOptionsDialog(final Deck deck) {
+        AnkiDatabase.DeckConfig cfg = new AnkiDatabase.DeckConfig();
+        try {
+            AnkiDatabase db = new AnkiDatabase(syncManager.getDbPath());
+            cfg = db.getDeckConf(deck.id);
+            db.close();
+        } catch (Exception ignored) {}
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Deck Options: " + deck.name);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(24, 16, 24, 16);
+
+        // New cards per day
+        TextView tvNew = new TextView(this);
+        tvNew.setText("New cards / day:");
+        tvNew.setTextSize(14);
+        tvNew.setTextColor(0xFFCCCCCC);
+        layout.addView(tvNew);
+
+        final EditText etNew = new EditText(this);
+        etNew.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        etNew.setText(String.valueOf(cfg.newPerDay));
+        layout.addView(etNew);
+
+        // Max reviews per day
+        TextView tvRev = new TextView(this);
+        tvRev.setText("Maximum reviews / day:");
+        tvRev.setTextSize(14);
+        tvRev.setTextColor(0xFFCCCCCC);
+        tvRev.setPadding(0, 16, 0, 0);
+        layout.addView(tvRev);
+
+        final EditText etRev = new EditText(this);
+        etRev.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        etRev.setText(String.valueOf(cfg.maxReviews));
+        layout.addView(etRev);
+
+        // Learning steps (in minutes)
+        TextView tvSteps = new TextView(this);
+        tvSteps.setText("Learning steps (minutes, e.g. 1 10):");
+        tvSteps.setTextSize(14);
+        tvSteps.setTextColor(0xFFCCCCCC);
+        tvSteps.setPadding(0, 16, 0, 0);
+        layout.addView(tvSteps);
+
+        StringBuilder sbSteps = new StringBuilder();
+        if (cfg.learnSteps != null) {
+            for (int s : cfg.learnSteps) {
+                int min = s / 60;
+                if (min < 1) min = 1;
+                if (sbSteps.length() > 0) sbSteps.append(" ");
+                sbSteps.append(min);
+            }
+        }
+        final EditText etSteps = new EditText(this);
+        etSteps.setText(sbSteps.toString());
+        layout.addView(etSteps);
+
+        builder.setView(layout);
+        builder.setPositiveButton("Save", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int which) {
+                String newStr = etNew.getText().toString().trim();
+                String revStr = etRev.getText().toString().trim();
+                String stepsStr = etSteps.getText().toString().trim();
+
+                int newPerDay = 10;
+                int maxReviews = 200;
+                try { if (!newStr.isEmpty()) newPerDay = Integer.parseInt(newStr); } catch (Exception ignored) {}
+                try { if (!revStr.isEmpty()) maxReviews = Integer.parseInt(revStr); } catch (Exception ignored) {}
+
+                try {
+                    AnkiDatabase db = new AnkiDatabase(syncManager.getDbPath());
+                    db.updateDeckConf(deck.id, newPerDay, maxReviews, stepsStr);
+                    db.close();
+
+                    Toast.makeText(DeckListActivity.this, "Deck options saved! New cards: " + newPerDay, Toast.LENGTH_SHORT).show();
+                    loadDecks();
+
+                    if (syncManager != null && syncManager.isLoggedIn() && syncManager.isNetworkAvailable()) {
+                        syncManager.autoSync(null);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to save deck options", e);
+                    Toast.makeText(DeckListActivity.this, "Error saving: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            }
+        });
+        builder.setNegativeButton("Cancel", null);
         builder.show();
     }
 
