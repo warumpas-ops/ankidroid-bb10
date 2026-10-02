@@ -2,8 +2,10 @@ package com.ankibb10;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
@@ -28,6 +30,7 @@ import com.ankibb10.db.AnkiDatabase;
 import com.ankibb10.db.ApkgImporter;
 import com.ankibb10.model.Deck;
 import com.ankibb10.model.DeckNode;
+import com.ankibb10.sync.AnkiWebSyncClient;
 import com.ankibb10.sync.SyncManager;
 
 import java.util.ArrayList;
@@ -107,7 +110,7 @@ public class DeckListActivity extends Activity {
     }
 
     private void showOverflowMenu() {
-        final CharSequence[] items = {"Add Note", "Create Deck", "Import .apkg", "Settings", "Log Out"};
+        final CharSequence[] items = {"Add Note", "Create Deck", "Import .apkg", "AnkiWeb Account", "Settings", "Log Out"};
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("AnkiDroid");
         builder.setItems(items, new DialogInterface.OnClickListener() {
@@ -119,12 +122,97 @@ public class DeckListActivity extends Activity {
                 } else if (which == 2) {
                     pickApkg();
                 } else if (which == 3) {
-                    startActivity(new Intent(DeckListActivity.this, SettingsActivity.class));
+                    showAccountDialog();
                 } else if (which == 4) {
+                    startActivity(new Intent(DeckListActivity.this, SettingsActivity.class));
+                } else if (which == 5) {
                     confirmLogout();
                 }
             }
         });
+        builder.show();
+    }
+
+    private void showAccountDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("AnkiWeb Account");
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(24, 16, 24, 16);
+
+        final EditText etEmail = new EditText(this);
+        etEmail.setHint("AnkiWeb Email");
+        etEmail.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        String savedUser = syncManager != null ? syncManager.getUsername() : "";
+        if (savedUser != null && !savedUser.isEmpty()) {
+            etEmail.setText(savedUser);
+        }
+        layout.addView(etEmail);
+
+        final EditText etPass = new EditText(this);
+        etPass.setHint("AnkiWeb Password");
+        etPass.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        layout.addView(etPass);
+
+        builder.setView(layout);
+        builder.setPositiveButton("Connect & Sync", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int which) {
+                final String email = etEmail.getText().toString().trim();
+                final String pass = etPass.getText().toString();
+                if (email.isEmpty() || pass.isEmpty()) {
+                    Toast.makeText(DeckListActivity.this, "Email and password are required", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                final android.app.ProgressDialog pd = new android.app.ProgressDialog(DeckListActivity.this);
+                pd.setMessage("Connecting to AnkiWeb...");
+                pd.setCancelable(false);
+                pd.show();
+
+                new AsyncTask<Void, String, String>() {
+                    boolean ok = false;
+                    protected String doInBackground(Void... v) {
+                        try {
+                            SharedPreferences prefs = getSharedPreferences(SyncManager.PREFS, Context.MODE_PRIVATE);
+                            String syncUrl = prefs.getString(SyncManager.KEY_SYNCURL, SyncManager.DEFAULT_URL);
+                            AnkiWebSyncClient client = new AnkiWebSyncClient(syncUrl);
+                            publishProgress("Authenticating with AnkiWeb...");
+                            String hkey = client.authenticate(email, pass);
+                            prefs.edit()
+                                    .putString(SyncManager.KEY_HOSTKEY, hkey)
+                                    .putString(SyncManager.KEY_USER, email)
+                                    .putString(SyncManager.KEY_PASS, pass)
+                                    .commit();
+                            ok = true;
+                            return "Connected successfully!";
+                        } catch (Exception e) {
+                            ok = false;
+                            return e.getMessage() != null ? e.getMessage() : e.toString();
+                        }
+                    }
+                    protected void onProgressUpdate(String... msgs) {
+                        if (pd.isShowing() && msgs.length > 0) pd.setMessage(msgs[0]);
+                    }
+                    protected void onPostExecute(String result) {
+                        if (pd.isShowing()) {
+                            try { pd.dismiss(); } catch (Exception ignored) {}
+                        }
+                        if (ok) {
+                            Toast.makeText(DeckListActivity.this, "Account connected! Starting sync...", Toast.LENGTH_SHORT).show();
+                            doSync();
+                        } else {
+                            new AlertDialog.Builder(DeckListActivity.this)
+                                    .setTitle("Login Failed")
+                                    .setMessage(result)
+                                    .setPositiveButton("OK", null)
+                                    .show();
+                        }
+                    }
+                }.execute();
+            }
+        });
+        builder.setNegativeButton("Cancel", null);
         builder.show();
     }
 
@@ -460,14 +548,23 @@ public class DeckListActivity extends Activity {
                     Toast.makeText(DeckListActivity.this, msg != null ? msg : "Sync complete!", Toast.LENGTH_SHORT).show();
                     loadDecks();
                 } else {
-                    Toast.makeText(DeckListActivity.this,
-                            msg != null ? msg : "Sync failed", Toast.LENGTH_LONG).show();
+                    final String displayErr = (msg != null && !msg.isEmpty()) ? msg : "Sync failed. Check connection or AnkiWeb credentials.";
+                    Toast.makeText(DeckListActivity.this, displayErr, Toast.LENGTH_LONG).show();
                     try {
-                        new AlertDialog.Builder(DeckListActivity.this)
-                                .setTitle("Sync Notice")
-                                .setMessage(msg != null ? msg : "Sync failed. Check connection or AnkiWeb credentials.")
-                                .setPositiveButton("OK", null)
-                                .show();
+                        AlertDialog.Builder errBuilder = new AlertDialog.Builder(DeckListActivity.this);
+                        errBuilder.setTitle("Sync Notice");
+                        errBuilder.setMessage(displayErr);
+                        if (displayErr.contains("SESSION_EXPIRED") || displayErr.contains("credentials") || displayErr.contains("Not logged in") || displayErr.contains("403")) {
+                            errBuilder.setPositiveButton("Reconnect Account", new DialogInterface.OnClickListener() {
+                                public void onClick(DialogInterface d, int which) {
+                                    showAccountDialog();
+                                }
+                            });
+                            errBuilder.setNegativeButton("Cancel", null);
+                        } else {
+                            errBuilder.setPositiveButton("OK", null);
+                        }
+                        errBuilder.show();
                     } catch (Exception ignored) {}
                 }
             }

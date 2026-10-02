@@ -620,6 +620,15 @@ public class AnkiDatabase {
 
     public void addRevlog(long cardId, int ease, int ivl, int lastIvl, int factor, long timeTakenMs, int type) {
         long id = System.currentTimeMillis();
+        try {
+            Cursor c = mDb.rawQuery("SELECT MAX(id) FROM revlog", null);
+            if (c.moveToFirst()) {
+                long maxId = c.getLong(0);
+                if (id <= maxId) id = maxId + 1;
+            }
+            c.close();
+        } catch (Exception ignored) {}
+
         long clampedTime = Math.max(1000, Math.min(timeTakenMs, 60000));
         mDb.execSQL(
                 "INSERT INTO revlog (id, cid, usn, ease, ivl, lastIvl, factor, time, type) VALUES(?,?,?,?,?,?,?,?,?)",

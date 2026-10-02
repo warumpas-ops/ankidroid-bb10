@@ -102,7 +102,7 @@ public class SyncManager {
         }
 
         if (!sIsSyncing.compareAndSet(false, true)) {
-            listener.onProgress("Sync already in progress...");
+            listener.onError("Sync is already in progress. Please wait a moment.");
             return;
         }
 
@@ -115,7 +115,7 @@ public class SyncManager {
             String dbPath   = getDbPath();
 
             if ((hkey == null || hkey.isEmpty()) && (username == null || password == null)) {
-                listener.onError("Not logged in");
+                listener.onError("Not logged in to AnkiWeb");
                 return;
             }
 
@@ -144,7 +144,7 @@ public class SyncManager {
                         Log.w(TAG, "Meta check after re-auth warning", e2);
                     }
                 } else {
-                    throw e;
+                    throw new Exception("SESSION_EXPIRED: AnkiWeb session expired after PC sync. Please reconnect your account.");
                 }
             }
 
