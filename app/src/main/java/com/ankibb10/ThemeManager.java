@@ -91,22 +91,31 @@ public class ThemeManager {
         }
     }
 
+    public static boolean isDark(Context context) {
+        String theme = getTheme(context);
+        return THEME_BLACK.equals(theme) || THEME_DARK.equals(theme);
+    }
+
     public static String getCardCss(Context context) {
         String theme = getTheme(context);
         if (THEME_BLACK.equals(theme)) {
-            return "body { background-color: #000000 !important; color: #FFFFFF !important; margin: 8px; font-family: sans-serif; }\n"
-                 + ".card { background-color: #000000 !important; color: #FFFFFF !important; }\n"
-                 + "hr { border: 0; height: 1px; background: #2A2A2A; }\n"
-                 + "a { color: #29B6F6 !important; }\n";
+            return "html, body { background-color: #000000 !important; color: #FFFFFF !important; margin: 8px; font-family: sans-serif; }\n"
+                 + ".card, .nightMode, .night_mode { background-color: #000000 !important; color: #FFFFFF !important; }\n"
+                 + "p, div, span, b, i, em, strong, li { color: inherit; }\n"
+                 + "hr { border: 0; height: 1px; background: #2A2A2A !important; margin: 12px 0; }\n"
+                 + "a { color: #29B6F6 !important; }\n"
+                 + "table, th, td { border-color: #333333 !important; }\n";
         } else if (THEME_DARK.equals(theme)) {
-            return "body { background-color: #202124 !important; color: #E8EAED !important; margin: 8px; font-family: sans-serif; }\n"
-                 + ".card { background-color: #202124 !important; color: #E8EAED !important; }\n"
-                 + "hr { border: 0; height: 1px; background: #3C4043; }\n"
-                 + "a { color: #8AB4F8 !important; }\n";
+            return "html, body { background-color: #202124 !important; color: #E8EAED !important; margin: 8px; font-family: sans-serif; }\n"
+                 + ".card, .nightMode, .night_mode { background-color: #202124 !important; color: #E8EAED !important; }\n"
+                 + "p, div, span, b, i, em, strong, li { color: inherit; }\n"
+                 + "hr { border: 0; height: 1px; background: #3C4043 !important; margin: 12px 0; }\n"
+                 + "a { color: #8AB4F8 !important; }\n"
+                 + "table, th, td { border-color: #444444 !important; }\n";
         } else {
-            return "body { background-color: #FFFFFF !important; color: #212121 !important; margin: 8px; font-family: sans-serif; }\n"
+            return "html, body { background-color: #FFFFFF !important; color: #212121 !important; margin: 8px; font-family: sans-serif; }\n"
                  + ".card { background-color: #FFFFFF !important; color: #212121 !important; }\n"
-                 + "hr { border: 0; height: 1px; background: #E0E0E0; }\n"
+                 + "hr { border: 0; height: 1px; background: #E0E0E0 !important; margin: 12px 0; }\n"
                  + "a { color: #0084FF !important; }\n";
         }
     }
