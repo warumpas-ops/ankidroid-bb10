@@ -163,12 +163,14 @@ public class SyncManager {
             long localMod = 0;
             AnkiDatabase.PendingChanges pending = null;
 
+            int localUsn = 0;
             long localScm = 0;
             try {
                 AnkiDatabase localDb = new AnkiDatabase(dbPath);
                 hasLocalChanges = localDb.hasUnsyncedChanges();
                 localMod = localDb.getColMod();
                 localScm = localDb.getColScm();
+                localUsn = localDb.getColUsn();
                 if (hasLocalChanges) {
                     pending = localDb.getPendingChanges();
                 }
@@ -183,8 +185,11 @@ public class SyncManager {
             long serverScm = (meta != null && meta.has("scm")) ? meta.optLong("scm", 0) : 0;
             long normLocalMod  = localMod > 100000000000L ? (localMod / 1000L) : localMod;
             long normServerMod = serverMod > 100000000000L ? (serverMod / 1000L) : serverMod;
-            boolean serverNewer = (normServerMod > normLocalMod) || (serverScm > 0 && localScm > 0 && serverScm != localScm);
-            Log.i(TAG, "Sync check: hasLocalChanges=" + hasLocalChanges + ", normLocalMod=" + normLocalMod + ", normServerMod=" + normServerMod + ", serverUsn=" + serverUsn + ", serverNewer=" + serverNewer);
+            boolean serverNewer = (normServerMod > normLocalMod)
+                    || (serverUsn > localUsn)
+                    || (serverScm > 0 && localScm > 0 && serverScm != localScm)
+                    || (!hasLocalChanges && (normServerMod != normLocalMod || serverUsn != localUsn));
+            Log.i(TAG, "Sync check: hasLocalChanges=" + hasLocalChanges + ", localUsn=" + localUsn + ", serverUsn=" + serverUsn + ", normLocalMod=" + normLocalMod + ", normServerMod=" + normServerMod + ", serverNewer=" + serverNewer);
 
             if (hasLocalChanges && serverNewer && pending != null && !pending.isEmpty()) {
                 // MERGE SCENARIO: User studied on PC (server is newer) AND has offline reviews on BlackBerry!
@@ -277,6 +282,61 @@ public class SyncManager {
         } finally {
             sIsSyncing.set(false);
         }
+    }
+
+    public void forceDownload(final SyncListener listener) {
+        if (!isLoggedIn()) {
+            if (listener != null) listener.onError("Not logged in");
+            return;
+        }
+        if (!isNetworkAvailable()) {
+            if (listener != null) listener.onError("No network available");
+            return;
+        }
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    sIsSyncing.set(true);
+                    if (listener != null) listener.onProgress("Connecting to AnkiWeb...");
+                    SharedPreferences prefs = mContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                    String hkey     = prefs.getString(KEY_HOSTKEY, null);
+                    String username = prefs.getString(KEY_USER, null);
+                    String password = prefs.getString(KEY_PASS, null);
+                    String syncUrl  = prefs.getString(KEY_SYNCURL, DEFAULT_URL);
+                    String dbPath   = getDbPath();
+
+                    AnkiWebSyncClient client = new AnkiWebSyncClient(syncUrl);
+                    client.setHostKey(hkey);
+
+                    try {
+                        client.getMeta();
+                    } catch (Exception e) {
+                        if (username != null && password != null && !password.isEmpty()) {
+                            hkey = client.authenticate(username, password);
+                            prefs.edit().putString(KEY_HOSTKEY, hkey).commit();
+                            client.setHostKey(hkey);
+                        } else {
+                            throw e;
+                        }
+                    }
+
+                    if (listener != null) listener.onProgress("Downloading full collection from AnkiWeb...");
+                    File wal = new File(dbPath + "-wal");
+                    if (wal.exists()) wal.delete();
+                    File shm = new File(dbPath + "-shm");
+                    if (shm.exists()) shm.delete();
+
+                    client.downloadCollection(dbPath);
+                    prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
+                    if (listener != null) listener.onSuccess("Successfully downloaded latest collection from AnkiWeb!");
+                } catch (Exception e) {
+                    Log.e(TAG, "Force download failed", e);
+                    if (listener != null) listener.onError("Download failed: " + e.getMessage());
+                } finally {
+                    sIsSyncing.set(false);
+                }
+            }
+        }).start();
     }
 
     private void copyFile(File src, File dst) throws IOException {

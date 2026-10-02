@@ -81,44 +81,74 @@ public class AnkiDatabase {
 
             long confId = deck.optLong("conf", 1);
             JSONObject dconf = mDconf.optJSONObject(String.valueOf(confId));
-            if (dconf == null) return cfg;
-
-            // New card limits
-            JSONObject newObj = dconf.optJSONObject("new");
-            if (newObj != null) {
-                cfg.newPerDay = newObj.optInt("perDay", cfg.newPerDay);
-                JSONArray intsArr = newObj.optJSONArray("ints");
-                if (intsArr != null && intsArr.length() >= 2) {
-                    cfg.graduatingIvl = intsArr.optInt(0, 1);
-                    cfg.easyIvl       = intsArr.optInt(1, 4);
+            if (dconf != null) {
+                // New card limits
+                JSONObject newObj = dconf.optJSONObject("new");
+                if (newObj != null) {
+                    cfg.newPerDay = newObj.optInt("perDay", cfg.newPerDay);
+                    JSONArray intsArr = newObj.optJSONArray("ints");
+                    if (intsArr != null && intsArr.length() >= 2) {
+                        cfg.graduatingIvl = intsArr.optInt(0, 1);
+                        cfg.easyIvl       = intsArr.optInt(1, 4);
+                    }
+                    JSONArray delays  = newObj.optJSONArray("delays");
+                    if (delays != null && delays.length() > 0) {
+                        cfg.learnSteps = new int[delays.length()];
+                        for (int i = 0; i < delays.length(); i++) {
+                            // Anki stores steps in minutes, convert to seconds
+                            cfg.learnSteps[i] = (int)(delays.getDouble(i) * 60);
+                        }
+                    }
                 }
-                JSONArray delays  = newObj.optJSONArray("delays");
-                if (delays != null && delays.length() > 0) {
-                    cfg.learnSteps = new int[delays.length()];
-                    for (int i = 0; i < delays.length(); i++) {
-                        // Anki stores steps in minutes, convert to seconds
-                        cfg.learnSteps[i] = (int)(delays.getDouble(i) * 60);
+
+                // Review limits
+                JSONObject revObj = dconf.optJSONObject("rev");
+                if (revObj != null) {
+                    cfg.maxReviews  = revObj.optInt("perDay", cfg.maxReviews);
+                    cfg.maxInterval = revObj.optInt("maxIvl", cfg.maxInterval);
+                }
+
+                // Lapse steps
+                JSONObject lapObj = dconf.optJSONObject("lapse");
+                if (lapObj != null) {
+                    JSONArray lapDelays = lapObj.optJSONArray("delays");
+                    if (lapDelays != null && lapDelays.length() > 0) {
+                        cfg.lapseSteps = new int[lapDelays.length()];
+                        for (int i = 0; i < lapDelays.length(); i++) {
+                            cfg.lapseSteps[i] = (int)(lapDelays.getDouble(i) * 60);
+                        }
                     }
                 }
             }
 
-            // Review limits
-            JSONObject revObj = dconf.optJSONObject("rev");
-            if (revObj != null) {
-                cfg.maxReviews  = revObj.optInt("perDay", cfg.maxReviews);
-                cfg.maxInterval = revObj.optInt("maxIvl", cfg.maxInterval);
+            // Check for per-deck overrides ("This deck" setting in Anki Desktop)
+            JSONObject deckNew = deck.optJSONObject("new");
+            if (deckNew != null) {
+                cfg.newPerDay = deckNew.optInt("perDay", cfg.newPerDay);
+            }
+            if (deck.has("newPerDay")) {
+                cfg.newPerDay = deck.optInt("newPerDay", cfg.newPerDay);
+            }
+            if (deck.has("perDay")) {
+                cfg.newPerDay = deck.optInt("perDay", cfg.newPerDay);
+            }
+            // Check for "Today only" temporary extra limit
+            int extendNew = deck.optInt("extendNew", 0);
+            if (extendNew > 0) {
+                cfg.newPerDay += extendNew;
             }
 
-            // Lapse steps
-            JSONObject lapObj = dconf.optJSONObject("lapse");
-            if (lapObj != null) {
-                JSONArray lapDelays = lapObj.optJSONArray("delays");
-                if (lapDelays != null && lapDelays.length() > 0) {
-                    cfg.lapseSteps = new int[lapDelays.length()];
-                    for (int i = 0; i < lapDelays.length(); i++) {
-                        cfg.lapseSteps[i] = (int)(lapDelays.getDouble(i) * 60);
-                    }
-                }
+            // Check for per-deck review overrides
+            JSONObject deckRev = deck.optJSONObject("rev");
+            if (deckRev != null) {
+                cfg.maxReviews = deckRev.optInt("perDay", cfg.maxReviews);
+            }
+            if (deck.has("revPerDay")) {
+                cfg.maxReviews = deck.optInt("revPerDay", cfg.maxReviews);
+            }
+            int extendRev = deck.optInt("extendRev", 0);
+            if (extendRev > 0) {
+                cfg.maxReviews += extendRev;
             }
         } catch (Exception e) {
             Log.e(TAG, "Error reading deck conf", e);
@@ -951,6 +981,19 @@ public class AnkiDatabase {
             if (c.moveToFirst()) scm = c.getLong(0);
             c.close();
             return scm;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    public int getColUsn() {
+        if (mDb == null || !mDb.isOpen()) return 0;
+        try {
+            Cursor c = mDb.rawQuery("SELECT usn FROM col", null);
+            int usn = 0;
+            if (c.moveToFirst()) usn = c.getInt(0);
+            c.close();
+            return usn;
         } catch (Exception e) {
             return 0;
         }

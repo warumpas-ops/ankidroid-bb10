@@ -110,7 +110,7 @@ public class DeckListActivity extends Activity {
     }
 
     private void showOverflowMenu() {
-        final CharSequence[] items = {"Add Note", "Create Deck", "Import .apkg", "AnkiWeb Account", "Settings", "Log Out"};
+        final CharSequence[] items = {"Add Note", "Create Deck", "Import .apkg", "AnkiWeb Account", "Force Download from AnkiWeb", "Settings", "Log Out"};
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("AnkiDroid");
         builder.setItems(items, new DialogInterface.OnClickListener() {
@@ -124,13 +124,64 @@ public class DeckListActivity extends Activity {
                 } else if (which == 3) {
                     showAccountDialog();
                 } else if (which == 4) {
-                    startActivity(new Intent(DeckListActivity.this, SettingsActivity.class));
+                    confirmForceDownload();
                 } else if (which == 5) {
+                    startActivity(new Intent(DeckListActivity.this, SettingsActivity.class));
+                } else if (which == 6) {
                     confirmLogout();
                 }
             }
         });
         builder.show();
+    }
+
+    private void confirmForceDownload() {
+        new AlertDialog.Builder(this)
+                .setTitle("Force Download")
+                .setMessage("Download the latest collection from AnkiWeb?\n\nThis will pull your exact cards, limits, and settings from AnkiWeb / PC and replace your local collection.")
+                .setPositiveButton("Download", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int which) {
+                        final android.app.ProgressDialog pd = new android.app.ProgressDialog(DeckListActivity.this);
+                        pd.setMessage("Downloading from AnkiWeb...");
+                        pd.setCancelable(false);
+                        pd.show();
+
+                        syncManager.forceDownload(new SyncManager.SyncListener() {
+                            public void onProgress(final String msg) {
+                                runOnUiThread(new Runnable() {
+                                    public void run() { if (pd.isShowing()) pd.setMessage(msg); }
+                                });
+                            }
+                            public void onSuccess(final String msg) {
+                                runOnUiThread(new Runnable() {
+                                    public void run() {
+                                        if (pd.isShowing()) {
+                                            try { pd.dismiss(); } catch (Exception ignored) {}
+                                        }
+                                        Toast.makeText(DeckListActivity.this, msg, Toast.LENGTH_SHORT).show();
+                                        loadDecks();
+                                    }
+                                });
+                            }
+                            public void onError(final String error) {
+                                runOnUiThread(new Runnable() {
+                                    public void run() {
+                                        if (pd.isShowing()) {
+                                            try { pd.dismiss(); } catch (Exception ignored) {}
+                                        }
+                                        new AlertDialog.Builder(DeckListActivity.this)
+                                                .setTitle("Download Failed")
+                                                .setMessage(error)
+                                                .setPositiveButton("OK", null)
+                                                .show();
+                                    }
+                                });
+                            }
+                        });
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void showAccountDialog() {
