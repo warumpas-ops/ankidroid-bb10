@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item
+        android:id="@+id/action_sync"
+        android:title="@string/sync"
+        android:icon="@drawable/ic_sync"
+        android:showAsAction="always" />
+
+    <item
+        android:id="@+id/action_add_note"
+        android:title="@string/add_note"
+        android:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_create_deck"
+        android:title="@string/create_deck"
+        android:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_import"
+        android:title="@string/import_apkg"
+        android:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_settings"
+        android:title="@string/settings"
+        android:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_logout"
+        android:title="@string/logout"
+        android:showAsAction="never" />
+
+</menu>

@@ -1,0 +1,33 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'com.ankibb10'
+    compileSdkVersion 35
+    buildToolsVersion '35.0.0'
+
+    defaultConfig {
+        applicationId 'com.ankibb10'
+        minSdkVersion 18
+        targetSdkVersion 22
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    buildTypes {
+        release { minifyEnabled false }
+        debug   { debuggable true }
+    }
+
+    lint {
+        abortOnError false
+        disable 'NewApi'
+    }
+}
+
+dependencies {
+}

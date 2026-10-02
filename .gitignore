@@ -1,0 +1,21 @@
+﻿# Build outputs
+.gradle/
+app/build/
+build/
+
+# Local config
+local.properties
+*.local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Keystore / signing
+*.jks
+*.keystore
+
+# APK files (the built output, not source)
+*.apk

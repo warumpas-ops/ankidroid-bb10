@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#0084FF</color>
+    <color name="primary_dark">#0060C0</color>
+    <color name="accent">#29B6F6</color>
+    <color name="window_bg">#ECEFF1</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="text_primary">#212121</color>
+    <color name="text_secondary">#757575</color>
+    <color name="divider">#CFD8DC</color>
+
+    <!-- Anki Logo Grey -->
+    <color name="anki_grey">#424647</color>
+    <color name="anki_grey_dark">#373A3B</color>
+
+    <!-- Anki count badge colors -->
+    <color name="count_new">#0084FF</color>
+    <color name="count_learn">#D84315</color>
+    <color name="count_review">#2E7D32</color>
+    <color name="count_zero">#B0BEC5</color>
+
+    <!-- Study Rating button colors -->
+    <color name="btn_again">#C62828</color>
+    <color name="btn_hard">#EF6C00</color>
+    <color name="btn_good">#2E7D32</color>
+    <color name="btn_easy">#1565C0</color>
+</resources>

@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:descendantFocusability="blocksDescendants"
+    android:background="@drawable/card_surface"
+    android:layout_marginLeft="6dp"
+    android:layout_marginRight="6dp"
+    android:layout_marginTop="2dp"
+    android:layout_marginBottom="2dp"
+    android:paddingLeft="4dp"
+    android:paddingRight="8dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
+
+    <!-- Indentation spacer for subdecks -->
+    <View
+        android:id="@+id/view_indent"
+        android:layout_width="0dp"
+        android:layout_height="1dp" />
+
+    <!-- Expand / Collapse chevron toggle -->
+    <ImageButton
+        android:id="@+id/btn_toggle_expand"
+        android:layout_width="26dp"
+        android:layout_height="26dp"
+        android:background="?android:attr/selectableItemBackground"
+        android:src="@drawable/ic_chevron_down"
+        android:scaleType="centerInside"
+        android:contentDescription="Expand/Collapse"
+        android:focusable="false"
+        android:layout_marginRight="2dp" />
+
+    <!-- Deck icon -->
+    <ImageView
+        android:id="@+id/iv_deck_icon"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:src="@drawable/ic_deck"
+        android:layout_marginRight="8dp"
+        android:contentDescription="Deck" />
+
+    <!-- Deck Title (Shows leaf name, e.g. "Vocab") -->
+    <TextView
+        android:id="@+id/tv_deck_name"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:textSize="14sp"
+        android:textColor="@color/text_primary"
+        android:maxLines="2"
+        android:ellipsize="end" />
+
+    <!-- 3 Counters: New (Blue), Learn (Red), Review (Green) -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginLeft="4dp">
+
+        <!-- New (Blue) -->
+        <TextView
+            android:id="@+id/tv_count_new"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/badge_new"
+            android:textColor="@color/count_new"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:minWidth="26dp"
+            android:gravity="center"
+            android:layout_marginRight="3dp"
+            android:text="0" />
+
+        <!-- Learn (Red) -->
+        <TextView
+            android:id="@+id/tv_count_learn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/badge_learn"
+            android:textColor="@color/count_learn"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:minWidth="26dp"
+            android:gravity="center"
+            android:layout_marginRight="3dp"
+            android:text="0" />
+
+        <!-- Review (Green) -->
+        <TextView
+            android:id="@+id/tv_count_review"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/badge_review"
+            android:textColor="@color/count_review"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:minWidth="26dp"
+            android:gravity="center"
+            android:text="0" />
+
+    </LinearLayout>
+
+</LinearLayout>

@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/window_bg">
+
+    <!-- Anki Logo Grey Header Bar (30dp) -->
+    <LinearLayout
+        android:id="@+id/ll_headers"
+        android:layout_width="match_parent"
+        android:layout_height="30dp"
+        android:layout_alignParentTop="true"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingLeft="10dp"
+        android:paddingRight="14dp"
+        android:background="@color/anki_grey">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="DECKS"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="@color/white" />
+
+        <!-- Sync Button -->
+        <ImageButton
+            android:id="@+id/btn_action_sync"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:src="@drawable/ic_sync"
+            android:scaleType="centerInside"
+            android:layout_marginLeft="8dp"
+            android:contentDescription="Sync" />
+
+        <!-- Overflow Menu Button -->
+        <ImageButton
+            android:id="@+id/btn_action_overflow"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:src="@drawable/ic_overflow"
+            android:scaleType="centerInside"
+            android:layout_marginLeft="2dp"
+            android:contentDescription="Menu" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <TextView
+            android:layout_width="34dp"
+            android:layout_height="wrap_content"
+            android:text="NEW"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:textColor="#40C4FF"
+            android:layout_marginRight="4dp" />
+
+        <TextView
+            android:layout_width="34dp"
+            android:layout_height="wrap_content"
+            android:text="LRN"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:textColor="#FF8A65"
+            android:layout_marginRight="4dp" />
+
+        <TextView
+            android:layout_width="34dp"
+            android:layout_height="wrap_content"
+            android:text="DUE"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:textColor="#81C784" />
+
+    </LinearLayout>
+
+    <!-- Empty State -->
+    <TextView
+        android:id="@+id/tv_empty"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/ll_headers"
+        android:gravity="center"
+        android:text="@string/no_decks"
+        android:textSize="14sp"
+        android:textColor="@color/text_secondary"
+        android:padding="24dp"
+        android:visibility="gone" />
+
+    <!-- Deck List -->
+    <ListView
+        android:id="@+id/lv_decks"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/ll_headers"
+        android:divider="@null"
+        android:dividerHeight="0dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="60dp"
+        android:clipToPadding="false" />
+
+    <!-- Floating Action Button (+) -->
+    <ImageButton
+        android:id="@+id/fab_add"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_alignParentBottom="true"
+        android:layout_alignParentRight="true"
+        android:layout_marginRight="14dp"
+        android:layout_marginBottom="14dp"
+        android:background="@drawable/fab_bg"
+        android:src="@drawable/ic_add"
+        android:contentDescription="Add Note / Deck" />
+
+</RelativeLayout>
