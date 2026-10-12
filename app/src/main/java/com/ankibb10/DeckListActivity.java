@@ -245,6 +245,10 @@ public class DeckListActivity extends Activity {
                 .setMessage("Download the latest collection from AnkiWeb?\n\nThis will pull your exact cards, limits, and settings from AnkiWeb / PC and replace your local collection.")
                 .setPositiveButton("Download", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface dialog, int which) {
+                        if (ankiDb != null) {
+                            try { ankiDb.close(); } catch (Exception ignored) {}
+                            ankiDb = null;
+                        }
                         final android.app.ProgressDialog pd = new android.app.ProgressDialog(DeckListActivity.this);
                         pd.setMessage("Downloading from AnkiWeb...");
                         pd.setCancelable(false);
@@ -338,6 +342,7 @@ public class DeckListActivity extends Activity {
                                     .putString(SyncManager.KEY_HOSTKEY, hkey)
                                     .putString(SyncManager.KEY_USER, email)
                                     .putString(SyncManager.KEY_PASS, pass)
+                                    .putString(SyncManager.KEY_SYNCURL, client.getSyncBase())
                                     .commit();
                             ok = true;
                             return "Connected successfully!";

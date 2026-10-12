@@ -85,8 +85,76 @@ public class AnkiWebSyncClient {
         }
 
         mHostKey = json.getString("key");
+
+        // Update cluster URL if hostNum is returned (e.g. hostNum=10 -> sync10.ankiweb.net)
+        if (json.has("hostNum")) {
+            int hostNum = json.optInt("hostNum", 0);
+            if (hostNum > 0) {
+                mSyncBase = "https://sync" + hostNum + ".ankiweb.net/sync";
+                Log.i(TAG, "Using cluster URL: " + mSyncBase);
+            }
+        } else if (json.has("syncUrl")) {
+            String rawUrl = json.getString("syncUrl").trim();
+            if (rawUrl.endsWith("/")) rawUrl = rawUrl.substring(0, rawUrl.length() - 1);
+            if (!rawUrl.endsWith("/sync")) rawUrl = rawUrl + "/sync";
+            mSyncBase = rawUrl;
+            Log.i(TAG, "Using syncUrl: " + mSyncBase);
+        }
+
         Log.i(TAG, "Authenticated successfully, hostKey obtained");
         return mHostKey;
+    }
+
+    /**
+     * Call /sync/abort to clear any stuck pending transaction on the server.
+     * Always safe to call even if the server has no pending transaction — returns OK either way.
+     * This fixes HTTP 409 errors on subsequent /download calls.
+     */
+    public void abortSync() {
+        if (mHostKey == null || mHostKey.isEmpty()) return;
+        try {
+            String boundary = "----AnkiSync" + System.currentTimeMillis();
+            HttpURLConnection conn = openConnection(mSyncBase + "/abort", "POST");
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+
+            ByteArrayOutputStream body = new ByteArrayOutputStream();
+            writeField(body, boundary, "k", mHostKey);
+            writeField(body, boundary, "v", CLIENT_VER);
+            writeField(body, boundary, "c", "1");
+            writeBoundaryEnd(body, boundary);
+
+            byte[] requestData = body.toByteArray();
+            conn.setFixedLengthStreamingMode(requestData.length);
+            OutputStream os = conn.getOutputStream();
+            os.write(requestData);
+            os.flush();
+            os.close();
+
+            int code = conn.getResponseCode();
+            Log.i(TAG, "Abort response code: " + code);
+            try {
+                if (code == 200) {
+                    InputStream is = conn.getInputStream();
+                    byte[] b = new byte[1024];
+                    while (is.read(b) != -1) {}
+                    is.close();
+                } else {
+                    InputStream es = conn.getErrorStream();
+                    if (es != null) {
+                        byte[] b = new byte[1024];
+                        while (es.read(b) != -1) {}
+                        es.close();
+                    }
+                }
+            } catch (Exception ignored) {}
+            conn.disconnect();
+        } catch (Exception e) {
+            // Abort is best-effort — ignore errors, just log
+            Log.w(TAG, "Abort sync call failed (ignored): " + e.getMessage());
+        }
     }
 
     public JSONObject getMeta() throws Exception {
@@ -202,10 +270,19 @@ public class AnkiWebSyncClient {
 
         File dest = new File(destPath);
         if (dest.exists()) dest.delete();
+        File wal = new File(destPath + "-wal");
+        if (wal.exists()) wal.delete();
+        File shm = new File(destPath + "-shm");
+        if (shm.exists()) shm.delete();
+
         if (!tempFile.renameTo(dest)) {
             // Fallback copy
             copyFile(tempFile, dest);
             tempFile.delete();
+        }
+
+        if (!dest.exists() || dest.length() < 100) {
+            throw new Exception("Downloaded collection is empty or corrupt");
         }
 
         Log.i(TAG, "Collection saved to " + destPath + " (" + dest.length() + " bytes)");
@@ -299,13 +376,14 @@ public class AnkiWebSyncClient {
 
         Log.i(TAG, "Upload response body: " + respBody);
 
-        if ("hostKey".equalsIgnoreCase(respBody) || "forbidden".equalsIgnoreCase(respBody)) {
-            throw new Exception("SESSION_EXPIRED: AnkiWeb session expired. Please reconnect your account.");
+        if (!"OK".equalsIgnoreCase(respBody) && !respBody.isEmpty()) {
+            if ("hostKey".equalsIgnoreCase(respBody) || "forbidden".equalsIgnoreCase(respBody)) {
+                throw new Exception("SESSION_EXPIRED: AnkiWeb session expired. Please reconnect your account.");
+            }
+            if (respBody.toLowerCase().contains("corrupt") || respBody.toLowerCase().contains("error")) {
+                throw new Exception("Upload rejected by AnkiWeb: " + respBody);
+            }
         }
-        if (respBody.toLowerCase().startsWith("error")) {
-            throw new Exception("Upload rejected by AnkiWeb: " + respBody);
-        }
-        // "OK" = success; any other non-empty unexpected body → log but continue
         Log.i(TAG, "Collection upload completed successfully (" + dbFile.length() + " bytes), response: " + respBody);
     }
 
@@ -404,4 +482,5 @@ public class AnkiWebSyncClient {
 
     public String getHostKey() { return mHostKey; }
     public void setHostKey(String hk) { mHostKey = hk; }
+    public String getSyncBase() { return mSyncBase; }
 }

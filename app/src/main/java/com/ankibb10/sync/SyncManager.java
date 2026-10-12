@@ -60,14 +60,36 @@ public class SyncManager {
             listener.onProgress("Connecting to AnkiWeb...");
             AnkiWebSyncClient client = new AnkiWebSyncClient(syncUrl);
             String hkey = client.authenticate(username, password);
-            prefs.edit()
+
+            // Save credentials and cluster URL immediately after auth — before any download attempt
+            SharedPreferences.Editor ed = prefs.edit()
                     .putString(KEY_HOSTKEY, hkey)
                     .putString(KEY_USER, username)
-                    .putString(KEY_PASS, password)
-                    .commit();
+                    .putString(KEY_PASS, password);
+            // Persist the cluster URL so future syncs route to the correct server
+            if (client.getSyncBase() != null && !client.getSyncBase().equals(syncUrl)) {
+                ed.putString(KEY_SYNCURL, client.getSyncBase());
+            }
+            ed.commit();
 
-            listener.onProgress("Downloading collection...");
+            // Abort any stuck server transaction before downloading (fixes 409)
+            listener.onProgress("Preparing sync...");
+            client.abortSync();
+            try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+
+            // Clean stale WAL/SHM before download
+            new File(getDbPath() + "-wal").delete();
+            new File(getDbPath() + "-shm").delete();
+
+            // Download collection
+            listener.onProgress("Downloading collection from AnkiWeb...");
             client.downloadCollection(getDbPath());
+            try {
+                AnkiDatabase localDb = new AnkiDatabase(getDbPath());
+                localDb.checkpointWal();
+                localDb.close();
+            } catch (Exception ignored) {}
+            prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
             listener.onSuccess("Logged in and collection synced!");
         } catch (Exception e) {
             Log.e(TAG, "Login failed", e);
@@ -125,152 +147,44 @@ public class SyncManager {
             }
 
             AnkiWebSyncClient client = new AnkiWebSyncClient(syncUrl);
-            client.setHostKey(hkey);
 
-            // 1. Check metadata and refresh session if needed
-            JSONObject meta = null;
-            try {
-                listener.onProgress("Checking AnkiWeb status...");
-                meta = client.getMeta();
-            } catch (Exception e) {
-                if (username != null && password != null && !password.isEmpty()) {
-                    listener.onProgress("Refreshing session...");
+            // Re-authenticate if credentials available to keep session fresh and ensure correct cluster URL
+            if (username != null && password != null && !password.isEmpty()) {
+                listener.onProgress("Connecting to AnkiWeb...");
+                try {
                     hkey = client.authenticate(username, password);
-                    prefs.edit().putString(KEY_HOSTKEY, hkey).commit();
+                    prefs.edit()
+                            .putString(KEY_HOSTKEY, hkey)
+                            .putString(KEY_SYNCURL, client.getSyncBase())
+                            .commit();
                     client.setHostKey(hkey);
-                    try {
-                        meta = client.getMeta();
-                    } catch (Exception e2) {
-                        Log.w(TAG, "Meta check after re-auth warning", e2);
+                } catch (Exception authEx) {
+                    Log.w(TAG, "Re-auth during sync failed, using existing key: " + authEx.getMessage());
+                    if (hkey != null && !hkey.isEmpty()) {
+                        client.setHostKey(hkey);
+                    } else {
+                        throw authEx;
                     }
-                } else {
-                    throw new Exception("SESSION_EXPIRED: AnkiWeb session expired after PC sync. Please reconnect your account.");
                 }
-            }
-
-            // 2. Initial download if no local collection exists
-            File dbFile = new File(dbPath);
-            if (!dbFile.exists()) {
-                listener.onProgress("Downloading full collection from AnkiWeb...");
-                client.downloadCollection(dbPath);
-                prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
-                listener.onSuccess("Downloaded latest collection!");
+            } else if (hkey != null && !hkey.isEmpty()) {
+                client.setHostKey(hkey);
+            } else {
+                listener.onError("Not logged in to AnkiWeb");
                 return;
             }
 
-            // 3. Inspect local database status & extract any offline pending reviews
-            boolean hasLocalChanges = false;
-            long localMod = 0;
-            AnkiDatabase.PendingChanges pending = null;
+            // Always clear any pending server lock before doing any operation
+            client.abortSync();
+            try { Thread.sleep(500); } catch (InterruptedException ignored) {}
 
-            int localUsn = 0;
-            long localScm = 0;
-            try {
-                AnkiDatabase localDb = new AnkiDatabase(dbPath);
-                hasLocalChanges = localDb.hasUnsyncedChanges();
-                localMod = localDb.getColMod();
-                localScm = localDb.getColScm();
-                localUsn = localDb.getColUsn();
-                if (hasLocalChanges) {
-                    pending = localDb.getPendingChanges();
-                }
-                localDb.checkpointWal();
-                localDb.close();
-            } catch (Exception e) {
-                Log.e(TAG, "Error checking local DB status", e);
-            }
-
-            long serverMod = (meta != null && meta.has("mod")) ? meta.optLong("mod", 0) : 0;
-            int serverUsn  = (meta != null && meta.has("usn")) ? meta.optInt("usn", 0) : 0;
-            long serverScm = (meta != null && meta.has("scm")) ? meta.optLong("scm", 0) : 0;
-            long normLocalMod  = localMod > 100000000000L ? (localMod / 1000L) : localMod;
-            long normServerMod = serverMod > 100000000000L ? (serverMod / 1000L) : serverMod;
-            boolean serverNewer = (normServerMod > normLocalMod)
-                    || (serverUsn > localUsn && localUsn >= 0)
-                    || (serverScm > 0 && localScm > 0 && serverScm != localScm)
-                    || (!hasLocalChanges && (normServerMod != normLocalMod || serverUsn != localUsn));
-            Log.i(TAG, "Sync check: hasLocalChanges=" + hasLocalChanges + ", localUsn=" + localUsn + ", serverUsn=" + serverUsn + ", normLocalMod=" + normLocalMod + ", normServerMod=" + normServerMod + ", serverNewer=" + serverNewer);
-
-            if (hasLocalChanges && serverNewer && pending != null && !pending.isEmpty()) {
-                // MERGE SCENARIO: User studied on PC (server is newer) AND has offline reviews on BlackBerry!
-                listener.onProgress("Merging offline reviews with PC changes...");
-
-                // Step 1: Download PC/Server version to a temp file
-                String tempPath = dbPath + ".server";
-                client.downloadCollection(tempPath);
-
-                // Step 2: Merge the local offline reviews into the freshly downloaded collection
-                try {
-                    AnkiDatabase serverDb = new AnkiDatabase(tempPath);
-                    serverDb.applyPendingChanges(pending, serverUsn + 1, normServerMod);
-                    serverDb.close();
-                } catch (Exception e) {
-                    Log.e(TAG, "Error applying pending changes to downloaded collection", e);
-                }
-
-                // Step 3: Replace local database with the merged collection
-                File serverFile = new File(tempPath);
-                File localFile = new File(dbPath);
-                if (localFile.exists()) localFile.delete();
-                File wal = new File(dbPath + "-wal");
-                if (wal.exists()) wal.delete();
-                File shm = new File(dbPath + "-shm");
-                if (shm.exists()) shm.delete();
-
-                if (!serverFile.renameTo(localFile)) {
-                    copyFile(serverFile, localFile);
-                    serverFile.delete();
-                }
-
-                // Step 4: Upload the merged collection back to AnkiWeb
-                listener.onProgress("Uploading merged progress to AnkiWeb...");
-                client.uploadCollection(dbPath);
-
-                prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
-                listener.onSuccess("Synced: offline reviews merged with PC!");
-
-            } else if (hasLocalChanges) {
-                // NORMAL UPLOAD: User studied on BlackBerry, PC has no new changes
-                listener.onProgress("Preparing collection for AnkiWeb...");
-                try {
-                    AnkiDatabase localDb = new AnkiDatabase(dbPath);
-                    localDb.prepareForUpload(serverUsn > 0 ? serverUsn : 1, normServerMod);
-                    localDb.close();
-                } catch (Exception e) {
-                    Log.e(TAG, "Error preparing upload", e);
-                }
-
-                listener.onProgress("Uploading study activity to AnkiWeb...");
-                try {
-                    client.uploadCollection(dbPath);
-                } catch (Exception e) {
-                    if (e.getMessage() != null && e.getMessage().contains("SESSION_EXPIRED") && username != null && password != null && !password.isEmpty()) {
-                        listener.onProgress("Refreshing session and retrying upload...");
-                        hkey = client.authenticate(username, password);
-                        prefs.edit().putString(KEY_HOSTKEY, hkey).commit();
-                        client.setHostKey(hkey);
-                        client.uploadCollection(dbPath);
-                    } else {
-                        throw e;
-                    }
-                }
-
-                prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
-                listener.onSuccess("Synced: all study activity uploaded to AnkiWeb!");
-
-            } else if (serverNewer) {
-                // NORMAL DOWNLOAD: User studied on PC, no local changes on BlackBerry
-                listener.onProgress("Downloading newer collection from AnkiWeb...");
-
-                // Clean stale WAL/SHM before writing new DB
-                File wal = new File(dbPath + "-wal");
-                if (wal.exists()) wal.delete();
-                File shm = new File(dbPath + "-shm");
-                if (shm.exists()) shm.delete();
+            File dbFile = new File(dbPath);
+            if (!dbFile.exists()) {
+                // No local collection exists yet -> Download from AnkiWeb
+                listener.onProgress("Downloading full collection from AnkiWeb...");
+                new File(dbPath + "-wal").delete();
+                new File(dbPath + "-shm").delete();
 
                 client.downloadCollection(dbPath);
-
-                // Checkpoint newly downloaded database
                 try {
                     AnkiDatabase localDb = new AnkiDatabase(dbPath);
                     localDb.checkpointWal();
@@ -278,12 +192,51 @@ public class SyncManager {
                 } catch (Exception ignored) {}
 
                 prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
-                listener.onSuccess("Synced: latest collection downloaded from PC!");
+                listener.onSuccess("Downloaded latest collection!");
+                return;
+            }
 
-            } else {
-                // In sync!
+            // Check if user has offline changes on device
+            boolean hasLocalChanges = false;
+            try {
+                AnkiDatabase localDb = new AnkiDatabase(dbPath);
+                hasLocalChanges = localDb.hasUnsyncedChanges();
+                localDb.checkpointWal();
+                localDb.close();
+            } catch (Exception e) {
+                Log.e(TAG, "Error checking local DB status", e);
+            }
+
+            if (hasLocalChanges) {
+                // User studied cards on device -> Upload progress to AnkiWeb
+                listener.onProgress("Preparing study activity for upload...");
+                try {
+                    AnkiDatabase localDb = new AnkiDatabase(dbPath);
+                    localDb.prepareForUpload(1, System.currentTimeMillis() / 1000L);
+                    localDb.close();
+                } catch (Exception e) {
+                    Log.e(TAG, "Error preparing upload", e);
+                }
+
+                listener.onProgress("Uploading study activity to AnkiWeb...");
+                client.uploadCollection(dbPath);
                 prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
-                listener.onSuccess("Collection is already up-to-date.");
+                listener.onSuccess("Synced: study activity uploaded to AnkiWeb!");
+            } else {
+                // No local changes on device -> Download latest from PC/AnkiWeb
+                listener.onProgress("Downloading latest collection from AnkiWeb...");
+                new File(dbPath + "-wal").delete();
+                new File(dbPath + "-shm").delete();
+
+                client.downloadCollection(dbPath);
+                try {
+                    AnkiDatabase localDb = new AnkiDatabase(dbPath);
+                    localDb.checkpointWal();
+                    localDb.close();
+                } catch (Exception ignored) {}
+
+                prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
+                listener.onSuccess("Synced: latest collection downloaded from AnkiWeb!");
             }
 
         } catch (Exception e) {
@@ -316,38 +269,64 @@ public class SyncManager {
             public void run() {
                 try {
                     sIsSyncing.set(true);
-                    if (listener != null) listener.onProgress("Connecting to AnkiWeb...");
                     SharedPreferences prefs = mContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-                    String hkey     = prefs.getString(KEY_HOSTKEY, null);
                     String username = prefs.getString(KEY_USER, null);
                     String password = prefs.getString(KEY_PASS, null);
                     String syncUrl  = prefs.getString(KEY_SYNCURL, DEFAULT_URL);
                     String dbPath   = getDbPath();
 
-                    AnkiWebSyncClient client = new AnkiWebSyncClient(syncUrl);
-                    client.setHostKey(hkey);
+                    // Always re-authenticate: guarantees a fresh hostKey AND the correct cluster URL
+                    if (listener != null) listener.onProgress("Authenticating with AnkiWeb...");
+                    if (username == null || password == null || password.isEmpty()) {
+                        if (listener != null) listener.onError("No credentials stored. Please log out and log in again.");
+                        return;
+                    }
 
-                    try {
-                        client.getMeta();
-                    } catch (Exception e) {
-                        if (username != null && password != null && !password.isEmpty()) {
-                            hkey = client.authenticate(username, password);
-                            prefs.edit().putString(KEY_HOSTKEY, hkey).commit();
-                            client.setHostKey(hkey);
-                        } else {
-                            throw e;
+                    AnkiWebSyncClient client = new AnkiWebSyncClient(syncUrl);
+                    String hkey = client.authenticate(username, password);
+                    prefs.edit()
+                        .putString(KEY_HOSTKEY, hkey)
+                        .putString(KEY_SYNCURL, client.getSyncBase())
+                        .commit();
+
+                    // Clean stale WAL/SHM files before writing new DB
+                    new File(dbPath + "-wal").delete();
+                    new File(dbPath + "-shm").delete();
+
+                    // Attempt download — abort stuck transactions between retries
+                    Exception lastError = null;
+                    int maxAttempts = 3;
+                    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+                        if (listener != null) listener.onProgress(
+                            attempt == 1
+                                ? "Downloading collection from AnkiWeb..."
+                                : "Retrying download (attempt " + attempt + "/" + maxAttempts + ")...");
+
+                        // Always abort before each attempt to clear any server-side lock
+                        client.abortSync();
+
+                        // Small pause to let the server process the abort
+                        try { Thread.sleep(800); } catch (InterruptedException ignored) {}
+
+                        try {
+                            client.downloadCollection(dbPath);
+                            // Success!
+                            prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
+                            if (listener != null) listener.onSuccess("Collection downloaded successfully!");
+                            return;
+                        } catch (Exception e) {
+                            lastError = e;
+                            Log.w(TAG, "Download attempt " + attempt + " failed: " + e.getMessage());
+                            if (attempt < maxAttempts) {
+                                try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+                            }
                         }
                     }
 
-                    if (listener != null) listener.onProgress("Downloading full collection from AnkiWeb...");
-                    File wal = new File(dbPath + "-wal");
-                    if (wal.exists()) wal.delete();
-                    File shm = new File(dbPath + "-shm");
-                    if (shm.exists()) shm.delete();
+                    // All attempts exhausted
+                    String errMsg = lastError != null ? lastError.getMessage() : "Unknown error";
+                    if (listener != null) listener.onError("Download failed after " + maxAttempts + " attempts: " + errMsg);
 
-                    client.downloadCollection(dbPath);
-                    prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
-                    if (listener != null) listener.onSuccess("Successfully downloaded latest collection from AnkiWeb!");
                 } catch (Exception e) {
                     Log.e(TAG, "Force download failed", e);
                     if (listener != null) listener.onError("Download failed: " + e.getMessage());
@@ -380,35 +359,31 @@ public class SyncManager {
                     String dbPath   = getDbPath();
 
                     AnkiWebSyncClient client = new AnkiWebSyncClient(syncUrl);
-                    client.setHostKey(hkey);
-
-                    // Always re-auth to ensure fresh session key before upload
-                    if (listener != null) listener.onProgress("Authenticating with AnkiWeb...");
-                    try {
-                        client.getMeta();
-                    } catch (Exception e) {
-                        if (username != null && password != null && !password.isEmpty()) {
-                            hkey = client.authenticate(username, password);
-                            prefs.edit().putString(KEY_HOSTKEY, hkey).commit();
-                            client.setHostKey(hkey);
-                        } else {
-                            throw e;
-                        }
+                    if (username != null && password != null && !password.isEmpty()) {
+                        if (listener != null) listener.onProgress("Authenticating with AnkiWeb...");
+                        hkey = client.authenticate(username, password);
+                        prefs.edit()
+                                .putString(KEY_HOSTKEY, hkey)
+                                .putString(KEY_SYNCURL, client.getSyncBase())
+                                .commit();
+                        client.setHostKey(hkey);
+                    } else if (hkey != null && !hkey.isEmpty()) {
+                        client.setHostKey(hkey);
+                    } else {
+                        if (listener != null) listener.onError("Not logged in to AnkiWeb");
+                        return;
                     }
 
-                    // Checkpoint WAL — merge all pending writes into main .anki2 file
+                    // Abort any pending server lock before upload
+                    client.abortSync();
+                    try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+
+                    // Checkpoint WAL and prepare collection for upload
                     if (listener != null) listener.onProgress("Preparing collection for upload...");
                     try {
                         AnkiDatabase db = new AnkiDatabase(dbPath);
-                        int serverUsn = 1;
-                        try {
-                            org.json.JSONObject meta = client.getMeta();
-                            serverUsn = meta.optInt("usn", 1);
-                            long serverMod = meta.optLong("mod", 0);
-                            db.prepareForUpload(serverUsn > 0 ? serverUsn : 1, serverMod);
-                        } catch (Exception ignored) {
-                            db.prepareForUpload(1, 0);
-                        }
+                        db.checkpointWal();
+                        db.prepareForUpload(1, System.currentTimeMillis() / 1000L);
                         db.close();
                     } catch (Exception e) {
                         Log.e(TAG, "prepareForUpload error in forceUpload", e);
@@ -417,7 +392,7 @@ public class SyncManager {
                     if (listener != null) listener.onProgress("Uploading collection to AnkiWeb...");
                     client.uploadCollection(dbPath);
                     prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
-                    if (listener != null) listener.onSuccess("Upload complete! Your study progress is now on AnkiWeb.\nNow sync on your laptop and click 'Download from AnkiWeb'.");
+                    if (listener != null) listener.onSuccess("Upload complete! Your study progress is now on AnkiWeb.\nNow sync on your PC and click 'Download from AnkiWeb'.");
                 } catch (Exception e) {
                     Log.e(TAG, "Force upload failed", e);
                     String msg = e.getMessage();
