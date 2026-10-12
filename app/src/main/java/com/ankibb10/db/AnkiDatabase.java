@@ -792,26 +792,24 @@ public class AnkiDatabase {
 
     public void updateCard(Card card) {
         long nowSec = System.currentTimeMillis() / 1000;
-        String fsrsData = null;
-        if (card.type == Card.TYPE_REVIEW) {
-            float s = card.ivl > 0 ? (float) card.ivl : 1.0f;
-            fsrsData = "{\"s\":" + s + ",\"d\":2.0,\"dr\":0.9,\"decay\":0.154,\"lrt\":" + nowSec + "}";
-        }
-
+        // IMPORTANT: Do NOT write fake FSRS data. PC Anki's FSRS engine uses the data field
+        // to schedule cards. If we write synthetic values, PC Anki overrides our queue/type/due
+        // and requeues graduated cards back to New. Write empty string so PC Anki handles FSRS.
         try {
-            if (fsrsData != null) {
-                mDb.execSQL(
-                        "UPDATE cards SET mod=?,usn=?,type=?,queue=?,due=?,ivl=?,factor=?,reps=?,lapses=?,left=?,odue=?,odid=?,flags=?,data=? WHERE id=?",
-                        new Object[]{
-                                nowSec, -1,
-                                card.type, card.queue, card.due, card.ivl,
-                                card.factor, card.reps, card.lapses,
-                                card.left, card.odue, card.odid, card.flags,
-                                fsrsData,
-                                card.id
-                        }
-                );
-            } else {
+            mDb.execSQL(
+                    "UPDATE cards SET mod=?,usn=?,type=?,queue=?,due=?,ivl=?,factor=?,reps=?,lapses=?,left=?,odue=?,odid=?,flags=?,data=? WHERE id=?",
+                    new Object[]{
+                            nowSec, -1,
+                            card.type, card.queue, card.due, card.ivl,
+                            card.factor, card.reps, card.lapses,
+                            card.left, card.odue, card.odid, card.flags,
+                            "",   // empty data — let PC Anki's FSRS handle scheduling
+                            card.id
+                    }
+            );
+        } catch (Exception e) {
+            // Fallback for older schemas without data column
+            try {
                 mDb.execSQL(
                         "UPDATE cards SET mod=?,usn=?,type=?,queue=?,due=?,ivl=?,factor=?,reps=?,lapses=?,left=?,odue=?,odid=?,flags=? WHERE id=?",
                         new Object[]{
@@ -822,19 +820,9 @@ public class AnkiDatabase {
                                 card.id
                         }
                 );
+            } catch (Exception e2) {
+                Log.e(TAG, "updateCard failed", e2);
             }
-        } catch (Exception e) {
-            // Fallback for older schemas without data column
-            mDb.execSQL(
-                    "UPDATE cards SET mod=?,usn=?,type=?,queue=?,due=?,ivl=?,factor=?,reps=?,lapses=?,left=?,odue=?,odid=?,flags=? WHERE id=?",
-                    new Object[]{
-                            nowSec, -1,
-                            card.type, card.queue, card.due, card.ivl,
-                            card.factor, card.reps, card.lapses,
-                            card.left, card.odue, card.odid, card.flags,
-                            card.id
-                    }
-            );
         }
         touchCol();
     }
@@ -989,8 +977,87 @@ public class AnkiDatabase {
         } finally {
             try { mDb.endTransaction(); } catch (Exception ignored) {}
         }
+        // Write newToday/revToday into the deck JSON so PC Anki knows how many
+        // new cards were already studied today and shows the correct (lower) count.
+        updateDecksJsonForToday();
         updateDecksCommonForToday(usn);
         checkpointWal();
+    }
+
+    /**
+     * Updates the col.decks JSON blob with newToday/revToday counters so PC Anki
+     * knows how many new and review cards were studied on this device today.
+     * Without this, PC Anki resets the counter to 0 and shows the full daily limit.
+     */
+    private void updateDecksJsonForToday() {
+        if (mDb == null || !mDb.isOpen() || mDecks == null) return;
+        try {
+            int today = todayDays();
+            long dayStartMs = (mColCrt + (long) today * 86400L) * 1000L;
+
+            Iterator<String> keys = mDecks.keys();
+            boolean changed = false;
+            while (keys.hasNext()) {
+                String key = keys.next();
+                try {
+                    JSONObject deck = mDecks.getJSONObject(key);
+                    long did = deck.getLong("id");
+
+                    // Count new cards studied today for this deck (type=0 in revlog)
+                    Cursor c = mDb.rawQuery(
+                            "SELECT COUNT(DISTINCT cid) FROM revlog WHERE id >= ? AND type = 0 " +
+                            "AND cid IN (SELECT id FROM cards WHERE did = ?)",
+                            new String[]{String.valueOf(dayStartMs), String.valueOf(did)});
+                    int newStudied = 0;
+                    if (c.moveToFirst()) newStudied = c.getInt(0);
+                    c.close();
+
+                    // Count review cards studied today for this deck (type=1,2 in revlog)
+                    c = mDb.rawQuery(
+                            "SELECT COUNT(*) FROM revlog WHERE id >= ? AND type IN (1, 2) " +
+                            "AND cid IN (SELECT id FROM cards WHERE did = ?)",
+                            new String[]{String.valueOf(dayStartMs), String.valueOf(did)});
+                    int revStudied = 0;
+                    if (c.moveToFirst()) revStudied = c.getInt(0);
+                    c.close();
+
+                    // Write newToday=[today, count] — Anki uses this to enforce the daily new limit.
+                    // PC Anki checks: remaining_new = newPerDay - newToday[1] (if newToday[0] == today)
+                    JSONArray newToday = new JSONArray();
+                    newToday.put(today);
+                    newToday.put(newStudied);
+                    deck.put("newToday", newToday);
+
+                    JSONArray revToday = new JSONArray();
+                    revToday.put(today);
+                    revToday.put(revStudied);
+                    deck.put("revToday", revToday);
+
+                    if (!deck.has("timeToday")) {
+                        JSONArray timeToday = new JSONArray();
+                        timeToday.put(today);
+                        timeToday.put(0);
+                        deck.put("timeToday", timeToday);
+                    }
+
+                    if (newStudied > 0 || revStudied > 0) {
+                        Log.i(TAG, "updateDecksJsonForToday: did=" + did
+                                + " newStudied=" + newStudied + " revStudied=" + revStudied);
+                        changed = true;
+                    }
+                } catch (Exception deckEx) {
+                    Log.w(TAG, "updateDecksJsonForToday deck error", deckEx);
+                }
+            }
+
+            if (changed) {
+                String newDecksJson = mDecks.toString();
+                mDb.execSQL("UPDATE col SET decks=?", new Object[]{newDecksJson});
+                Log.i(TAG, "updateDecksJsonForToday: wrote updated decks JSON to col");
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "updateDecksJsonForToday failed: " + e.getMessage());
+        }
     }
 
     private static byte[] encodeVarint(long val) {
