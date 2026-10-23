@@ -13,9 +13,15 @@ public class Scheduler {
     private static final int STARTING_EASE = 2500;
 
     private final AnkiDatabase mDb;
+    private final FsrsScheduler mFsrs;
 
     public Scheduler(AnkiDatabase db) {
         mDb = db;
+        mFsrs = new FsrsScheduler();
+    }
+
+    public boolean isFsrsActive() {
+        return mDb != null && mDb.isFsrsEnabled();
     }
 
     public String[] getNextIntervals(Card card) {
@@ -23,6 +29,10 @@ public class Scheduler {
         if (card == null) {
             ivls[0] = "<1m"; ivls[1] = "10m"; ivls[2] = "1d"; ivls[3] = "4d";
             return ivls;
+        }
+
+        if (isFsrsActive()) {
+            return getNextIntervalsFsrs(card);
         }
 
         AnkiDatabase.DeckConfig cfg = mDb.getDeckConf(card.did);
@@ -63,6 +73,40 @@ public class Scheduler {
         return ivls;
     }
 
+    private String[] getNextIntervalsFsrs(Card card) {
+        String[] ivls = new String[4];
+        AnkiDatabase.DeckConfig cfg = mDb.getDeckConf(card.did);
+        int[] lapseSteps = (cfg.lapseSteps != null && cfg.lapseSteps.length > 0) ? cfg.lapseSteps : new int[]{600};
+        int maxIvl = cfg.maxInterval > 0 ? cfg.maxInterval : 36500;
+        int today = mDb.todayDays();
+
+        // Again
+        ivls[0] = "<" + formatSeconds(lapseSteps[0]);
+
+        // Hard
+        FsrsScheduler.MemoryState msHard = mFsrs.step(card, EASE_HARD, today);
+        int hardIvl = Math.min(maxIvl, mFsrs.intervalFromStability(msHard.stability));
+
+        // Good
+        FsrsScheduler.MemoryState msGood = mFsrs.step(card, EASE_GOOD, today);
+        int goodIvl = Math.min(maxIvl, mFsrs.intervalFromStability(msGood.stability));
+
+        // Easy
+        FsrsScheduler.MemoryState msEasy = mFsrs.step(card, EASE_EASY, today);
+        int easyIvl = Math.min(maxIvl, Math.max(goodIvl + 1, mFsrs.intervalFromStability(msEasy.stability)));
+
+        // Ensure monotonicity
+        if (hardIvl >= goodIvl && goodIvl > 1) {
+            hardIvl = Math.max(1, goodIvl - 1);
+        }
+
+        ivls[1] = formatDays(hardIvl);
+        ivls[2] = formatDays(goodIvl);
+        ivls[3] = formatDays(easyIvl);
+
+        return ivls;
+    }
+
     private String formatSeconds(int sec) {
         if (sec < 60) return "<1m";
         if (sec < 3600) return (sec / 60) + "m";
@@ -85,10 +129,14 @@ public class Scheduler {
         int lastTyp = card.type;
         if (card.factor == 0) card.factor = STARTING_EASE;
 
-        if (card.type == Card.TYPE_REVIEW) {
-            answerReview(card, ease, today);
+        if (isFsrsActive()) {
+            answerFsrs(card, ease, today, lastTyp);
         } else {
-            answerLearning(card, ease, today);
+            if (card.type == Card.TYPE_REVIEW) {
+                answerReview(card, ease, today);
+            } else {
+                answerLearning(card, ease, today);
+            }
         }
         card.reps++;
 
@@ -112,6 +160,39 @@ public class Scheduler {
 
         mDb.updateCard(card);
         mDb.addRevlog(card.id, ease, revlogIvl, revlogLastIvl, card.factor, timeTakenMs, revType);
+    }
+
+    private void answerFsrs(Card card, int ease, int today, int lastTyp) {
+        AnkiDatabase.DeckConfig cfg = mDb.getDeckConf(card.did);
+        int maxIvl = cfg.maxInterval > 0 ? cfg.maxInterval : 36500;
+        int[] lapseSteps = (cfg.lapseSteps != null && cfg.lapseSteps.length > 0) ? cfg.lapseSteps : new int[]{600};
+
+        FsrsScheduler.MemoryState nextState = mFsrs.step(card, ease, today);
+        card.data = FsrsScheduler.formatCardData(nextState);
+        card.fsrsStability = nextState.stability;
+        card.fsrsDifficulty = nextState.difficulty;
+
+        if (ease == EASE_AGAIN) {
+            card.lapses++;
+            card.type  = Card.TYPE_RELEARN;
+            card.queue = Card.QUEUE_LEARN;
+            card.left  = lapseSteps.length;
+            card.due   = (int)(System.currentTimeMillis() / 1000 + lapseSteps[0]);
+            card.ivl   = 0;
+        } else {
+            int ivl = mFsrs.intervalFromStability(nextState.stability);
+            if (ease == EASE_EASY) {
+                FsrsScheduler.MemoryState goodState = mFsrs.step(card, EASE_GOOD, today);
+                int goodIvl = mFsrs.intervalFromStability(goodState.stability);
+                ivl = Math.max(goodIvl + 1, ivl);
+            }
+            card.ivl   = Math.min(maxIvl, Math.max(1, ivl));
+            card.due   = today + card.ivl;
+            card.type  = Card.TYPE_REVIEW;
+            card.queue = Card.QUEUE_REVIEW;
+            card.left  = 0;
+        }
+        card.factor = (int) Math.round(nextState.stability * 100);
     }
 
     private void answerLearning(Card card, int ease, int today) {

@@ -32,4 +32,8 @@ public class Card {
     public String frontHtml;
     public String backHtml;
     public long   startedAt;
+
+    public String data;
+    public double fsrsStability  = -1.0;
+    public double fsrsDifficulty = -1.0;
 }

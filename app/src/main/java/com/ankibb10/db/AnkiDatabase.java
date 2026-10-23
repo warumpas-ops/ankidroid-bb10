@@ -483,7 +483,7 @@ public class AnkiDatabase {
 
         // 1. Learning cards (always fetch due learning cards)
         Cursor c = mDb.rawQuery(
-                "SELECT id,nid,did,ord,mod,usn,type,queue,due,ivl,factor,reps,lapses,left,odue,odid,flags " +
+                "SELECT id,nid,did,ord,mod,usn,type,queue,due,ivl,factor,reps,lapses,left,odue,odid,flags,data " +
                 "FROM cards WHERE did IN (" + inClause + ") AND queue=1 AND due<=? ORDER BY due",
                 new String[]{String.valueOf(nowSec)});
         cards.addAll(rowsToCards(c));
@@ -492,7 +492,7 @@ public class AnkiDatabase {
         // 2. Review cards (up to revLimit configured by PC/deck config)
         if (revLimit > 0) {
             c = mDb.rawQuery(
-                    "SELECT id,nid,did,ord,mod,usn,type,queue,due,ivl,factor,reps,lapses,left,odue,odid,flags " +
+                    "SELECT id,nid,did,ord,mod,usn,type,queue,due,ivl,factor,reps,lapses,left,odue,odid,flags,data " +
                     "FROM cards WHERE did IN (" + inClause + ") AND queue=2 AND due<=? ORDER BY due LIMIT ?",
                     new String[]{String.valueOf(today), String.valueOf(revLimit)});
             cards.addAll(rowsToCards(c));
@@ -502,7 +502,7 @@ public class AnkiDatabase {
         // 3. New cards (up to newLimit configured by PC/deck config)
         if (newLimit > 0) {
             c = mDb.rawQuery(
-                    "SELECT id,nid,did,ord,mod,usn,type,queue,due,ivl,factor,reps,lapses,left,odue,odid,flags " +
+                    "SELECT id,nid,did,ord,mod,usn,type,queue,due,ivl,factor,reps,lapses,left,odue,odid,flags,data " +
                     "FROM cards WHERE did IN (" + inClause + ") AND queue=0 ORDER BY due LIMIT ?",
                     new String[]{String.valueOf(newLimit)});
             cards.addAll(rowsToCards(c));
@@ -550,6 +550,9 @@ public class AnkiDatabase {
             card.odue    = c.getInt(14);
             card.odid    = c.getLong(15);
             card.flags   = c.getInt(16);
+            if (c.getColumnCount() > 17) {
+                card.data = c.getString(17);
+            }
             list.add(card);
         }
         return list;
@@ -803,7 +806,7 @@ public class AnkiDatabase {
                             card.type, card.queue, card.due, card.ivl,
                             card.factor, card.reps, card.lapses,
                             card.left, card.odue, card.odid, card.flags,
-                            "",   // empty data — let PC Anki's FSRS handle scheduling
+                            card.data != null ? card.data : "",
                             card.id
                     }
             );
@@ -1217,6 +1220,7 @@ public class AnkiDatabase {
         public int type, queue, due, ivl, factor, reps, lapses, left, odue;
         public long odid;
         public int flags;
+        public String data;
     }
 
     public static class PendingNote {
@@ -1277,7 +1281,7 @@ public class AnkiDatabase {
             c.close();
 
             // Cards
-            c = mDb.rawQuery("SELECT id, mod, type, queue, due, ivl, factor, reps, lapses, left, odue, odid, flags FROM cards WHERE usn=-1", null);
+            c = mDb.rawQuery("SELECT id, mod, type, queue, due, ivl, factor, reps, lapses, left, odue, odid, flags, data FROM cards WHERE usn=-1", null);
             while (c.moveToNext()) {
                 PendingCardUpdate cu = new PendingCardUpdate();
                 cu.id = c.getLong(0);
@@ -1293,6 +1297,9 @@ public class AnkiDatabase {
                 cu.odue = c.getInt(10);
                 cu.odid = c.getLong(11);
                 cu.flags = c.getInt(12);
+                if (c.getColumnCount() > 13) {
+                    cu.data = c.getString(13);
+                }
                 pc.cards.add(cu);
             }
             c.close();
@@ -1323,23 +1330,12 @@ public class AnkiDatabase {
 
             // Apply cards
             for (PendingCardUpdate cu : pc.cards) {
-                String fsrsData = null;
-                if (cu.type == Card.TYPE_REVIEW) {
-                    float s = cu.ivl > 0 ? (float) cu.ivl : 1.0f;
-                    fsrsData = "{\"s\":" + s + ",\"d\":2.0,\"dr\":0.9,\"decay\":0.154,\"lrt\":" + nowSec + "}";
-                }
+                String cardData = cu.data != null ? cu.data : "";
                 try {
-                    if (fsrsData != null) {
-                        mDb.execSQL(
-                            "UPDATE cards SET mod=?, usn=?, type=?, queue=?, due=?, ivl=?, factor=?, reps=?, lapses=?, left=?, odue=?, odid=?, flags=?, data=? WHERE id=?",
-                            new Object[]{nowSec, usn, cu.type, cu.queue, cu.due, cu.ivl, cu.factor, cu.reps, cu.lapses, cu.left, cu.odue, cu.odid, cu.flags, fsrsData, cu.id}
-                        );
-                    } else {
-                        mDb.execSQL(
-                            "UPDATE cards SET mod=?, usn=?, type=?, queue=?, due=?, ivl=?, factor=?, reps=?, lapses=?, left=?, odue=?, odid=?, flags=? WHERE id=?",
-                            new Object[]{nowSec, usn, cu.type, cu.queue, cu.due, cu.ivl, cu.factor, cu.reps, cu.lapses, cu.left, cu.odue, cu.odid, cu.flags, cu.id}
-                        );
-                    }
+                    mDb.execSQL(
+                        "UPDATE cards SET mod=?, usn=?, type=?, queue=?, due=?, ivl=?, factor=?, reps=?, lapses=?, left=?, odue=?, odid=?, flags=?, data=? WHERE id=?",
+                        new Object[]{nowSec, usn, cu.type, cu.queue, cu.due, cu.ivl, cu.factor, cu.reps, cu.lapses, cu.left, cu.odue, cu.odid, cu.flags, cardData, cu.id}
+                    );
                 } catch (Exception ignored) {
                     mDb.execSQL(
                         "UPDATE cards SET mod=?, usn=?, type=?, queue=?, due=?, ivl=?, factor=?, reps=?, lapses=?, left=?, odue=?, odid=?, flags=? WHERE id=?",
@@ -1409,6 +1405,21 @@ public class AnkiDatabase {
         } catch (Exception e) {
             return 0;
         }
+    }
+
+    
+    public boolean isFsrsEnabled() {
+        if (mDb == null || !mDb.isOpen()) return false;
+        try {
+            Cursor c = mDb.rawQuery("SELECT val FROM config WHERE key = 'fsrs'", null);
+            if (c.moveToFirst()) {
+                String val = c.getString(0);
+                c.close();
+                return "true".equalsIgnoreCase(val) || (val != null && val.contains("true"));
+            }
+            c.close();
+        } catch (Exception ignored) {}
+        return false;
     }
 
     public int todayDays() {
