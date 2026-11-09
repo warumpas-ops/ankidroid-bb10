@@ -418,10 +418,17 @@ public class SyncManager {
         out.close();
     }
 
-    public String getDbPath() {
-        return new File(mContext.getFilesDir(), "collection.anki2").getAbsolutePath();
+    public File getStorageDir() {
+        return StorageManager.getStorageDir(mContext);
     }
 
+    public File getMediaDir() {
+        return StorageManager.getMediaDir(mContext);
+    }
+
+    public String getDbPath() {
+        return StorageManager.getDbPath(mContext);
+    }
     public boolean isLoggedIn() {
         return !mContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                         .getString(KEY_HOSTKEY, "").isEmpty()

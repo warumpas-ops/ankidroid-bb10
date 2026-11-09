@@ -56,6 +56,7 @@ public class StudyActivity extends Activity {
     private TextView     tvLblAgain, tvLblHard, tvLblGood, tvLblEasy;
 
     private AnkiDatabase db;
+    private SyncManager syncManager;
     private Scheduler    scheduler;
     private Queue<Card>  cardQueue = new LinkedList<Card>();
     private Card         currentCard;
@@ -160,9 +161,9 @@ public class StudyActivity extends Activity {
             }
 
             // Open DB & Scheduler
-            SyncManager sm = new SyncManager(this);
+            syncManager = new SyncManager(this);
             try {
-                db        = new AnkiDatabase(sm.getDbPath());
+                db        = new AnkiDatabase(syncManager.getDbPath());
                 scheduler = new Scheduler(db);
             } catch (Exception e) {
                 Log.e(TAG, "DB open error", e);
@@ -276,6 +277,28 @@ public class StudyActivity extends Activity {
 
     private void showNextCard() {
         try {
+            if (cardQueue.size() < 10 && db != null) {
+                try {
+                    List<Card> more = db.getDueCards(deckId, 50);
+                    if (more != null) {
+                        for (Card mc : more) {
+                            boolean inQueue = (currentCard != null && currentCard.id == mc.id);
+                            if (!inQueue) {
+                                for (Card qc : cardQueue) {
+                                    if (qc.id == mc.id) {
+                                        inQueue = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!inQueue) {
+                                cardQueue.add(mc);
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+
             if (cardQueue.isEmpty()) {
                 if (wvCard != null) wvCard.setVisibility(View.GONE);
                 if (llFrontAnswer != null) llFrontAnswer.setVisibility(View.GONE);
@@ -327,11 +350,17 @@ public class StudyActivity extends Activity {
         if (llFrontAnswer != null) llFrontAnswer.setVisibility(View.VISIBLE);
         if (llBackRatings != null) llBackRatings.setVisibility(View.GONE);
 
+        if (currentCard != null && (currentCard.frontHtml == null || currentCard.backHtml == null)) {
+            if (db != null) {
+                db.renderCard(currentCard);
+            }
+        }
+
         String rawHtml = currentCard != null && currentCard.frontHtml != null ? currentCard.frontHtml : "<html><body><div class='card'>No Content</div></body></html>";
         String css = ThemeManager.getCardCss(this);
         String html = "<style>" + css + "</style>" + rawHtml;
         if (wvCard != null) {
-            File mediaDir = new File(getFilesDir(), "collection.media");
+            File mediaDir = syncManager != null ? syncManager.getMediaDir() : new File(getFilesDir(), "collection.media");
             wvCard.loadDataWithBaseURL("file://" + mediaDir.getAbsolutePath() + "/", html, "text/html", "UTF-8", null);
         }
 
@@ -361,7 +390,7 @@ public class StudyActivity extends Activity {
         String css = ThemeManager.getCardCss(this);
         String html = "<style>" + css + "</style>" + rawHtml;
         if (wvCard != null) {
-            File mediaDir = new File(getFilesDir(), "collection.media");
+            File mediaDir = syncManager != null ? syncManager.getMediaDir() : new File(getFilesDir(), "collection.media");
             wvCard.loadDataWithBaseURL("file://" + mediaDir.getAbsolutePath() + "/", html, "text/html", "UTF-8", null);
         }
 
@@ -417,6 +446,9 @@ public class StudyActivity extends Activity {
             if (scheduler != null) {
                 scheduler.answerCard(currentCard, ease, timeTaken);
             }
+
+            currentCard.frontHtml = null;
+            currentCard.backHtml = null;
 
             if (ease == Scheduler.EASE_AGAIN || currentCard.queue == Card.QUEUE_LEARN) {
                 cardQueue.add(currentCard);
@@ -580,26 +612,35 @@ public class StudyActivity extends Activity {
         if (filename == null || filename.isEmpty()) return;
         try {
             File targetFile = null;
+            // 0. Active collection storage media directory
+            if (syncManager != null) {
+                File f0 = new File(syncManager.getMediaDir(), filename);
+                if (f0.exists()) targetFile = f0;
+            }
             // 1. App filesDir/collection.media/
-            File f1 = new File(new File(getFilesDir(), "collection.media"), filename);
-            if (f1.exists()) targetFile = f1;
-
+            if (targetFile == null) {
+                File f1 = new File(new File(getFilesDir(), "collection.media"), filename);
+                if (f1.exists()) targetFile = f1;
+            }
             // 2. External /sdcard/AnkiDroid/collection.media/
             if (targetFile == null) {
                 File f2 = new File(android.os.Environment.getExternalStorageDirectory(), "AnkiDroid/collection.media/" + filename);
                 if (f2.exists()) targetFile = f2;
             }
-
-            // 3. External /sdcard/collection.media/
+            // 3. Removable /storage/sdcard1/AnkiDroid/collection.media/
             if (targetFile == null) {
-                File f3 = new File(android.os.Environment.getExternalStorageDirectory(), "collection.media/" + filename);
+                File f3 = new File("/storage/sdcard1/AnkiDroid/collection.media/" + filename);
                 if (f3.exists()) targetFile = f3;
             }
-
-            // 4. App filesDir/
+            // 4. External /sdcard/collection.media/
             if (targetFile == null) {
-                File f4 = new File(getFilesDir(), filename);
+                File f4 = new File(android.os.Environment.getExternalStorageDirectory(), "collection.media/" + filename);
                 if (f4.exists()) targetFile = f4;
+            }
+            // 5. App filesDir/
+            if (targetFile == null) {
+                File f5 = new File(getFilesDir(), filename);
+                if (f5.exists()) targetFile = f5;
             }
 
             if (targetFile != null) {

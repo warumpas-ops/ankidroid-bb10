@@ -91,6 +91,74 @@
                     android:textColor="@color/primary" />
             </LinearLayout>
 
+            <!-- Section: Storage & SD Card -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="STORAGE &amp; SD CARD"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textColor="@color/primary"
+                android:layout_marginBottom="6dp"
+                android:layout_marginLeft="4dp" />
+
+            <LinearLayout
+                android:id="@+id/row_storage"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/card_surface"
+                android:padding="12dp"
+                android:layout_marginBottom="16dp"
+                android:clickable="true"
+                android:focusable="true">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:id="@+id/tv_lbl_storage"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Storage Location"
+                        android:textSize="13sp"
+                        android:textColor="@color/text_primary" />
+
+                    <TextView
+                        android:id="@+id/tv_val_storage_type"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Internal App Storage"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/primary" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tv_val_storage_path"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="/data/data/com.ankibb10/files"
+                    android:textSize="11sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginTop="4dp"
+                    android:singleLine="true"
+                    android:ellipsize="middle" />
+
+                <TextView
+                    android:id="@+id/tv_val_storage_space"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Checking space..."
+                    android:textSize="11sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginTop="2dp" />
+
+            </LinearLayout>
             <!-- Section 1: Keyboard Mapping -->
             <TextView
                 android:layout_width="wrap_content"

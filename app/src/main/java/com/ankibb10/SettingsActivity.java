@@ -1,6 +1,12 @@
 package com.ankibb10;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.app.ProgressDialog;
+import android.os.AsyncTask;
+import com.ankibb10.sync.StorageManager;
+import java.io.File;
+import java.util.List;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -26,6 +32,11 @@ public class SettingsActivity extends Activity {
 
     private View rowTheme;
     private TextView tvValTheme;
+
+    private View rowStorage;
+    private TextView tvValStorageType;
+    private TextView tvValStoragePath;
+    private TextView tvValStorageSpace;
 
     private View rowShowAnswer, rowAgain, rowHard, rowGood, rowEasy;
     private TextView tvShowAnswer, tvAgain, tvHard, tvGood, tvEasy;
@@ -55,6 +66,18 @@ public class SettingsActivity extends Activity {
                 public void onClick(View v) { promptTheme(); }
             });
         }
+
+        rowStorage         = findViewById(R.id.row_storage);
+        tvValStorageType   = (TextView) findViewById(R.id.tv_val_storage_type);
+        tvValStoragePath   = (TextView) findViewById(R.id.tv_val_storage_path);
+        tvValStorageSpace  = (TextView) findViewById(R.id.tv_val_storage_space);
+
+        if (rowStorage != null) {
+            rowStorage.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) { promptStorageLocation(); }
+            });
+        }
+        updateStorageLabels();
 
         rowShowAnswer = findViewById(R.id.row_key_show_answer);
         rowAgain      = findViewById(R.id.row_key_again);
@@ -316,5 +339,162 @@ public class SettingsActivity extends Activity {
         if (root != null) root.setBackgroundColor(bg);
         View tb = findViewById(R.id.ll_settings_toolbar);
         if (tb != null) tb.setBackgroundColor(toolbar);
+    }
+
+    private void updateStorageLabels() {
+        File currentDir = StorageManager.getStorageDir(this);
+        String currentPath = currentDir.getAbsolutePath();
+        if (tvValStoragePath != null) tvValStoragePath.setText(currentPath);
+        if (tvValStorageSpace != null) tvValStorageSpace.setText(StorageManager.formatSpace(currentDir));
+
+        List<StorageManager.StorageLocation> locs = StorageManager.getAvailableLocations(this);
+        String typeName = "Custom Storage";
+        for (StorageManager.StorageLocation loc : locs) {
+            if (loc.path.equals(currentPath)) {
+                typeName = loc.title;
+                break;
+            }
+        }
+        if (tvValStorageType != null) tvValStorageType.setText(typeName);
+    }
+
+    private void promptStorageLocation() {
+        final List<StorageManager.StorageLocation> locs = StorageManager.getAvailableLocations(this);
+        int count = locs.size();
+        final String[] labels = new String[count + 1];
+        File currentDir = StorageManager.getStorageDir(this);
+        String currentPath = currentDir.getAbsolutePath();
+        int selected = -1;
+
+        for (int i = 0; i < count; i++) {
+            StorageManager.StorageLocation loc = locs.get(i);
+            labels[i] = loc.title + "\n" + loc.description;
+            if (loc.path.equals(currentPath)) {
+                selected = i;
+            }
+        }
+        labels[count] = "Custom Storage Path...\nEnter custom folder location";
+        if (selected == -1) selected = count;
+
+        new AlertDialog.Builder(this)
+                .setTitle("Choose Storage Location")
+                .setSingleChoiceItems(labels, selected, new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                        if (which == labels.length - 1) {
+                            promptCustomStoragePath();
+                        } else {
+                            onStorageLocationSelected(locs.get(which).path);
+                        }
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void promptCustomStoragePath() {
+        final EditText input = new EditText(this);
+        input.setText(StorageManager.getStorageDir(this).getAbsolutePath());
+        new AlertDialog.Builder(this)
+                .setTitle("Custom Storage Path")
+                .setMessage("Enter the directory path where AnkiBB10 should store your collection and media:")
+                .setView(input)
+                .setPositiveButton("Set Path", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int which) {
+                        String path = input.getText().toString().trim();
+                        if (!path.isEmpty()) {
+                            onStorageLocationSelected(path);
+                        }
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void onStorageLocationSelected(final String newPath) {
+        final File currentDir = StorageManager.getStorageDir(this);
+        final File newDir = new File(newPath);
+
+        try {
+            if (currentDir.getCanonicalPath().equals(newDir.getCanonicalPath())) {
+                Toast.makeText(this, "Storage location unchanged", Toast.LENGTH_SHORT).show();
+                return;
+            }
+        } catch (Exception ignored) {}
+
+        final File oldDb = new File(currentDir, "collection.anki2");
+        final File newDb = new File(newDir, "collection.anki2");
+
+        if (oldDb.exists() && !newDb.exists()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Move Existing Collection?")
+                    .setMessage("An existing collection was found in your current storage. Would you like to copy your collection and media files to the new location?\n\nDestination:\n" + newPath)
+                    .setPositiveButton("Copy Data", new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface dialog, int which) {
+                            migrateStorage(currentDir, newDir);
+                        }
+                    })
+                    .setNegativeButton("Switch Only", new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface dialog, int which) {
+                            StorageManager.setStorageDir(SettingsActivity.this, newPath);
+                            updateStorageLabels();
+                            Toast.makeText(SettingsActivity.this, "Switched storage location", Toast.LENGTH_SHORT).show();
+                        }
+                    })
+                    .setNeutralButton("Cancel", null)
+                    .show();
+        } else {
+            StorageManager.setStorageDir(this, newPath);
+            updateStorageLabels();
+            Toast.makeText(this, "Storage location updated", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void migrateStorage(final File src, final File dst) {
+        final ProgressDialog pd = new ProgressDialog(this);
+        pd.setTitle("Moving Collection");
+        pd.setMessage("Copying files to " + dst.getAbsolutePath() + "...");
+        pd.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
+        pd.setMax(100);
+        pd.setCancelable(false);
+        pd.show();
+
+        new AsyncTask<Void, Integer, Exception>() {
+            private String statusMessage = "";
+
+            protected Exception doInBackground(Void... params) {
+                try {
+                    StorageManager.copyCollectionData(src, dst, new StorageManager.CopyProgressListener() {
+                        public void onProgress(String message, int percent) {
+                            statusMessage = message;
+                            publishProgress(percent);
+                        }
+                    });
+                    return null;
+                } catch (Exception e) {
+                    return e;
+                }
+            }
+
+            protected void onProgressUpdate(Integer... values) {
+                if (values.length > 0) {
+                    pd.setProgress(values[0]);
+                    if (statusMessage != null && !statusMessage.isEmpty()) {
+                        pd.setMessage(statusMessage);
+                    }
+                }
+            }
+
+            protected void onPostExecute(Exception e) {
+                try { pd.dismiss(); } catch (Exception ignored) {}
+                if (e == null) {
+                    StorageManager.setStorageDir(SettingsActivity.this, dst.getAbsolutePath());
+                    updateStorageLabels();
+                    Toast.makeText(SettingsActivity.this, "Storage moved successfully!", Toast.LENGTH_LONG).show();
+                } else {
+                    Toast.makeText(SettingsActivity.this, "Failed to copy data: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            }
+        }.execute();
     }
 }

@@ -9,8 +9,8 @@ android {
         applicationId 'com.ankibb10'
         minSdkVersion 18
         targetSdkVersion 22
-        versionCode 2
-        versionName '1.1.0'
+        versionCode 3
+        versionName '1.2.0'
     }
 
     compileOptions {

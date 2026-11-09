@@ -651,7 +651,7 @@ public class AnkiDatabase {
                 HTML_SUFFIX;
     }
 
-    private void renderCard(Card card) {
+    public void renderCard(Card card) {
         try {
             Cursor nc = mDb.rawQuery(
                     "SELECT mid, flds FROM notes WHERE id=?",
