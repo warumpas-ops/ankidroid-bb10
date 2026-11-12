@@ -578,14 +578,9 @@ public class AnkiWebSyncClient {
         conn.setConnectTimeout(30000);
         conn.setReadTimeout(30000);
 
-        JSONObject payload = new JSONObject();
-        payload.put("k", mHostKey);
-        payload.put("v", "ankidroid,2.16.4,android media 1.0");
-        byte[] gz = gzipBytes(payload.toString().getBytes("UTF-8"));
-
         ByteArrayOutputStream body = new ByteArrayOutputStream();
         writeField(body, boundary, "k", mHostKey);
-        writeFileField(body, boundary, "data", "data", gz);
+        writeField(body, boundary, "v", CLIENT_VER + " media 1.0");
         writeBoundaryEnd(body, boundary);
 
         byte[] reqData = body.toByteArray();
@@ -606,18 +601,17 @@ public class AnkiWebSyncClient {
         Log.i(TAG, "msync/begin resp: " + resp);
 
         JSONObject json = new JSONObject(resp);
-        // Response: {"data": {"sk": "...", "usn": 123}, "err": ""}
-        String sk;
-        int usn;
+        String sk = "";
+        int usn = 0;
         if (json.has("data") && !json.isNull("data")) {
             JSONObject data = json.getJSONObject("data");
-            sk  = data.optString("sk", "");
+            sk  = data.optString("sk", mHostKey);
             usn = data.optInt("usn", 0);
         } else {
-            sk  = json.optString("sk", "");
+            sk  = json.optString("sk", mHostKey);
             usn = json.optInt("usn", 0);
         }
-        if (sk.isEmpty()) throw new Exception("msync/begin: no session key in response: " + resp);
+        if (sk.isEmpty()) sk = mHostKey;
         return new String[]{sk, String.valueOf(usn)};
     }
 
@@ -631,12 +625,12 @@ public class AnkiWebSyncClient {
         conn.setReadTimeout(60000);
 
         JSONObject payload = new JSONObject();
-        payload.put("last", lastUsn);
-        payload.put("sk", sk);
+        payload.put("lastUsn", lastUsn);
         byte[] gz = gzipBytes(payload.toString().getBytes("UTF-8"));
 
         ByteArrayOutputStream body = new ByteArrayOutputStream();
         writeField(body, boundary, "sk", sk);
+        writeField(body, boundary, "c", "1");
         writeFileField(body, boundary, "data", "data", gz);
         writeBoundaryEnd(body, boundary);
 
@@ -655,16 +649,9 @@ public class AnkiWebSyncClient {
         String resp = readGzipOrPlain(conn.getInputStream());
         conn.disconnect();
 
-        // Response: {"data": {"files": [[name, usn, md5], ...], "toDelete": [], "usn": 123}, "err": ""}
-        List<String[]> result = new ArrayList<>();
+        List<String[]> result = new ArrayList<String[]>();
         JSONObject json = new JSONObject(resp);
-        org.json.JSONArray files = null;
-        if (json.has("data") && !json.isNull("data")) {
-            JSONObject data = json.getJSONObject("data");
-            if (data.has("files")) files = data.getJSONArray("files");
-        } else if (json.has("files")) {
-            files = json.getJSONArray("files");
-        }
+        org.json.JSONArray files = json.optJSONArray("data");
         if (files != null) {
             for (int i = 0; i < files.length(); i++) {
                 org.json.JSONArray entry = files.getJSONArray(i);
@@ -679,7 +666,7 @@ public class AnkiWebSyncClient {
 
     /**
      * POST /msync/downloadFiles — download a zip of media files and extract them.
-     * Returns number of files successfully written.
+     * Maps zip entries ('0', '1', ...) using _meta mapping.
      */
     private int mediaSyncDownloadFiles(String sk, List<String> filenames, File mediaDir) throws Exception {
         String boundary = "----AnkiMedia" + System.currentTimeMillis();
@@ -687,10 +674,9 @@ public class AnkiWebSyncClient {
         conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
         conn.setDoOutput(true);
         conn.setConnectTimeout(30000);
-        conn.setReadTimeout(120000); // media downloads can be large
+        conn.setReadTimeout(120000);
 
         JSONObject payload = new JSONObject();
-        payload.put("sk", sk);
         org.json.JSONArray arr = new org.json.JSONArray();
         for (String f : filenames) arr.put(f);
         payload.put("files", arr);
@@ -698,6 +684,7 @@ public class AnkiWebSyncClient {
 
         ByteArrayOutputStream body = new ByteArrayOutputStream();
         writeField(body, boundary, "sk", sk);
+        writeField(body, boundary, "c", "1");
         writeFileField(body, boundary, "data", "data", gz);
         writeBoundaryEnd(body, boundary);
 
@@ -715,12 +702,10 @@ public class AnkiWebSyncClient {
 
         // Response is a zip file (may be gzip-wrapped)
         InputStream rawStream = conn.getInputStream();
-        // Peek first 2 bytes for gzip magic
         byte[] peek = new byte[2];
         int peekRead = rawStream.read(peek);
         InputStream stream;
         if (peekRead == 2 && peek[0] == (byte)0x1f && peek[1] == (byte)0x8b) {
-            // It's gzip-wrapped — decompress to get the zip
             java.io.PushbackInputStream pis = new java.io.PushbackInputStream(rawStream, 2);
             pis.unread(peek, 0, peekRead);
             stream = new GZIPInputStream(pis);
@@ -730,26 +715,51 @@ public class AnkiWebSyncClient {
             stream = pis;
         }
 
-        // Extract zip entries → save each to mediaDir
-        int count = 0;
+        // Buffer all entries in the zip
+        java.util.Map<String, byte[]> zipEntries = new java.util.HashMap<String, byte[]>();
         ZipInputStream zis = new ZipInputStream(stream);
         ZipEntry entry;
         byte[] buf = new byte[8192];
         while ((entry = zis.getNextEntry()) != null) {
             String name = entry.getName();
-            if (name.isEmpty() || name.contains("..")) { zis.closeEntry(); continue; }
-            File out = new File(mediaDir, name);
-            FileOutputStream fos = new FileOutputStream(out);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
             int n;
-            while ((n = zis.read(buf)) != -1) fos.write(buf, 0, n);
-            fos.close();
+            while ((n = zis.read(buf)) != -1) baos.write(buf, 0, n);
+            zipEntries.put(name, baos.toByteArray());
             zis.closeEntry();
-            count++;
-            Log.d(TAG, "Downloaded media file: " + name);
         }
         zis.close();
         conn.disconnect();
-        Log.i(TAG, "Downloaded " + count + " media files in this batch");
+
+        // Parse _meta to map index -> real filename
+        JSONObject meta = null;
+        if (zipEntries.containsKey("_meta")) {
+            try {
+                String metaStr = new String(zipEntries.get("_meta"), "UTF-8");
+                meta = new JSONObject(metaStr);
+            } catch (Exception ex) {
+                Log.w(TAG, "Failed to parse _meta: " + ex.getMessage());
+            }
+        }
+
+        int count = 0;
+        for (java.util.Map.Entry<String, byte[]> e : zipEntries.entrySet()) {
+            String key = e.getKey();
+            if ("_meta".equals(key)) continue;
+            String realName = key;
+            if (meta != null && meta.has(key)) {
+                realName = meta.getString(key);
+            }
+            if (realName.isEmpty() || realName.contains("..")) continue;
+            File out = new File(mediaDir, realName);
+            FileOutputStream fos = new FileOutputStream(out);
+            fos.write(e.getValue());
+            fos.flush();
+            fos.close();
+            count++;
+            Log.d(TAG, "Saved media file: " + realName + " (" + e.getValue().length + " bytes)");
+        }
+        Log.i(TAG, "Successfully extracted " + count + " media files in this batch");
         return count;
     }
 
@@ -765,11 +775,11 @@ public class AnkiWebSyncClient {
 
             JSONObject payload = new JSONObject();
             payload.put("local", localCount);
-            payload.put("sk", sk);
             byte[] gz = gzipBytes(payload.toString().getBytes("UTF-8"));
 
             ByteArrayOutputStream body = new ByteArrayOutputStream();
             writeField(body, boundary, "sk", sk);
+            writeField(body, boundary, "c", "1");
             writeFileField(body, boundary, "data", "data", gz);
             writeBoundaryEnd(body, boundary);
 
@@ -780,7 +790,6 @@ public class AnkiWebSyncClient {
 
             int code = conn.getResponseCode();
             Log.i(TAG, "msync/mediaSanity code=" + code);
-            // Best-effort — don't throw on failure
             try { conn.getInputStream().close(); } catch (Exception ignored) {}
             conn.disconnect();
         } catch (Exception e) {
@@ -790,7 +799,6 @@ public class AnkiWebSyncClient {
 
     /** Read response as plain string; handles optional gzip encoding */
     private String readGzipOrPlain(InputStream is) throws IOException {
-        // Buffer into bytes first so we can inspect
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         byte[] buf = new byte[8192];
         int n;
