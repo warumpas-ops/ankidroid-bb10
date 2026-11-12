@@ -47,6 +47,25 @@ public class StorageManager {
                 return dir;
             }
         }
+
+        // Auto-detect existing collection on SD card if user hasn't explicitly set a preference yet
+        for (String p : getSdCardCandidates()) {
+            try {
+                File dir = new File(p);
+                if (dir.exists() && dir.isDirectory()) {
+                    File ankiDir = new File(dir, "AnkiDroid");
+                    if (new File(ankiDir, "collection.anki2").exists() || new File(ankiDir, "collection.media").exists()) {
+                        Log.i(TAG, "Auto-detected collection in " + ankiDir.getAbsolutePath());
+                        return ankiDir;
+                    }
+                    if (new File(dir, "collection.anki2").exists() || new File(dir, "collection.media").exists()) {
+                        Log.i(TAG, "Auto-detected collection in " + dir.getAbsolutePath());
+                        return dir;
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
         return context.getFilesDir();
     }
 
@@ -67,6 +86,28 @@ public class StorageManager {
             mediaDir.mkdirs();
         }
         return mediaDir;
+    }
+
+    public static List<String> getSdCardCandidates() {
+        List<String> sdCandidates = new ArrayList<String>();
+        String secStorage = System.getenv("SECONDARY_STORAGE");
+        if (secStorage != null && !secStorage.isEmpty()) {
+            for (String part : secStorage.split(":")) {
+                if (!part.trim().isEmpty()) sdCandidates.add(part.trim());
+            }
+        }
+
+        // BlackBerry 10 native mount points & Android 4.x microSD paths
+        sdCandidates.add("/accounts/1000/removable/sdcard");
+        sdCandidates.add("/mnt/removable_sdcard");
+        sdCandidates.add("/storage/sdcard1");
+        sdCandidates.add("/mnt/sdcard/removable_sdcard");
+        sdCandidates.add("/removable/sdcard");
+        sdCandidates.add("/mnt/extSdCard");
+        sdCandidates.add("/storage/extSdCard");
+        sdCandidates.add("/mnt/external_sd");
+        sdCandidates.add("/accounts/1000/shared");
+        return sdCandidates;
     }
 
     public static List<StorageLocation> getAvailableLocations(Context context) {
@@ -104,24 +145,8 @@ public class StorageManager {
         } catch (Exception ignored) {}
 
         // 3. Removable MicroSD Cards (BlackBerry 10 & Android 4.3 mount points)
-        List<String> sdCandidates = new ArrayList<String>();
-        String secStorage = System.getenv("SECONDARY_STORAGE");
-        if (secStorage != null && !secStorage.isEmpty()) {
-            for (String part : secStorage.split(":")) {
-                if (!part.trim().isEmpty()) sdCandidates.add(part.trim());
-            }
-        }
-
-        // Standard BlackBerry 10 & Android 4.x microSD paths
-        sdCandidates.add("/storage/sdcard1");
-        sdCandidates.add("/mnt/sdcard/removable_sdcard");
-        sdCandidates.add("/removable/sdcard");
-        sdCandidates.add("/mnt/extSdCard");
-        sdCandidates.add("/storage/extSdCard");
-        sdCandidates.add("/mnt/external_sd");
-
         int sdIndex = 1;
-        for (String p : sdCandidates) {
+        for (String p : getSdCardCandidates()) {
             try {
                 File dir = new File(p);
                 if (dir.exists() && dir.isDirectory()) {

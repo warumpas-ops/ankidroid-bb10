@@ -353,6 +353,61 @@ public class AnkiDatabase {
         if (mDecks == null) return result;
 
         int today = todayDays();
+        long nowSec = System.currentTimeMillis() / 1000;
+        long dayStartMs = (mColCrt + (long) today * 86400L) * 1000L;
+
+        // 1. Fast single-pass aggregate of all cards grouped by did
+        Map<Long, Integer> newCounts = new HashMap<Long, Integer>();
+        Map<Long, Integer> learnCounts = new HashMap<Long, Integer>();
+        Map<Long, Integer> reviewCounts = new HashMap<Long, Integer>();
+
+        try {
+            Cursor c = mDb.rawQuery(
+                    "SELECT did, " +
+                    "SUM(CASE WHEN queue=0 THEN 1 ELSE 0 END), " +
+                    "SUM(CASE WHEN queue=1 AND due<=? THEN 1 ELSE 0 END), " +
+                    "SUM(CASE WHEN queue=2 AND due<=? THEN 1 ELSE 0 END) " +
+                    "FROM cards GROUP BY did",
+                    new String[]{String.valueOf(nowSec), String.valueOf(today)}
+            );
+            while (c.moveToNext()) {
+                long did = c.getLong(0);
+                newCounts.put(did, c.getInt(1));
+                learnCounts.put(did, c.getInt(2));
+                reviewCounts.put(did, c.getInt(3));
+            }
+            c.close();
+        } catch (Exception e) {
+            Log.e(TAG, "Card aggregate query error", e);
+        }
+
+        // 2. Fast aggregate of studied cards today from revlog
+        Map<Long, Integer> newStudiedMap = new HashMap<Long, Integer>();
+        Map<Long, Integer> revStudiedMap = new HashMap<Long, Integer>();
+        try {
+            Cursor rc = mDb.rawQuery(
+                    "SELECT cards.did, revlog.type, COUNT(DISTINCT revlog.cid) " +
+                    "FROM revlog JOIN cards ON revlog.cid = cards.id " +
+                    "WHERE revlog.id >= ? " +
+                    "GROUP BY cards.did, revlog.type",
+                    new String[]{String.valueOf(dayStartMs)}
+            );
+            while (rc.moveToNext()) {
+                long did = rc.getLong(0);
+                int type = rc.getInt(1);
+                int cnt = rc.getInt(2);
+                if (type == 0) {
+                    newStudiedMap.put(did, cnt);
+                } else if (type == 1 || type == 2) {
+                    Integer cur = revStudiedMap.get(did);
+                    revStudiedMap.put(did, (cur == null ? 0 : cur) + cnt);
+                }
+            }
+            rc.close();
+        } catch (Exception e) {
+            Log.e(TAG, "Revlog aggregate query error", e);
+        }
+
         Iterator<String> keys = mDecks.keys();
         while (keys.hasNext()) {
             String key = keys.next();
@@ -360,15 +415,28 @@ public class AnkiDatabase {
                 JSONObject d = mDecks.getJSONObject(key);
                 long did = d.getLong("id");
                 String name = d.getString("name");
-                if (name.equals("Default") && did == 1) {
-                    int total = countCards(did);
-                    if (total == 0) continue;
+
+                DeckConfig cfg = getDeckConf(did);
+                int newRaw = newCounts.containsKey(did) ? newCounts.get(did) : 0;
+                int newStudied = newStudiedMap.containsKey(did) ? newStudiedMap.get(did) : 0;
+                int newAllowance = Math.max(0, cfg.newPerDay - newStudied);
+                int newCount = Math.min(newRaw, newAllowance);
+
+                int learnCount = learnCounts.containsKey(did) ? learnCounts.get(did) : 0;
+
+                int revRaw = reviewCounts.containsKey(did) ? reviewCounts.get(did) : 0;
+                int revStudied = revStudiedMap.containsKey(did) ? revStudiedMap.get(did) : 0;
+                int revAllowance = Math.max(0, cfg.maxReviews - revStudied);
+                int reviewCount = Math.min(revRaw, revAllowance);
+
+                if (name.equals("Default") && did == 1 && newCount == 0 && learnCount == 0 && reviewCount == 0) {
+                    continue;
                 }
 
                 Deck deck = new Deck(did, name);
-                deck.newCount    = countNew(did);
-                deck.learnCount  = countLearning(did);
-                deck.reviewCount = countReview(did, today);
+                deck.newCount    = newCount;
+                deck.learnCount  = learnCount;
+                deck.reviewCount = reviewCount;
                 result.add(deck);
             } catch (JSONException e) {
                 Log.e(TAG, "Deck parse error", e);
@@ -376,7 +444,6 @@ public class AnkiDatabase {
         }
         return result;
     }
-
     public int countCards(long did) {
         List<Long> ids = getDeckAndChildrenIds(did);
         Cursor c = mDb.rawQuery("SELECT COUNT(*) FROM cards WHERE did IN (" + makeInClause(ids) + ")", null);

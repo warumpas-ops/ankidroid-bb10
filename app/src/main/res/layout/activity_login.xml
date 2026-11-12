@@ -87,6 +87,41 @@
 
         </LinearLayout>
 
+        <!-- Storage Location Picker Row -->
+        <LinearLayout
+            android:id="@+id/row_login_storage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/card_surface"
+            android:paddingLeft="12dp"
+            android:paddingRight="12dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp"
+            android:layout_marginBottom="12dp"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Storage Location:"
+                android:textSize="12sp"
+                android:textColor="@color/text_secondary" />
+
+            <TextView
+                android:id="@+id/tv_login_storage_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Internal App Storage"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:textColor="@color/primary" />
+
+        </LinearLayout>
+
         <!-- Log In Button -->
         <Button
             android:id="@+id/btn_login"
