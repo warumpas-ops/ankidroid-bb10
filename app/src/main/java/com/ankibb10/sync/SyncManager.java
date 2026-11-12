@@ -25,6 +25,7 @@ public class SyncManager {
     public static final String KEY_USER    = "username";
     public static final String KEY_PASS    = "password";
     public static final String KEY_LAST_SYNC = "last_sync_time";
+    public static final String KEY_MEDIA_USN = "media_usn";
     public static final String DEFAULT_URL = "https://sync.ankiweb.net";
 
     private static final AtomicBoolean sIsSyncing = new AtomicBoolean(false);
@@ -192,6 +193,7 @@ public class SyncManager {
                 } catch (Exception ignored) {}
 
                 prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
+                syncMedia(client, listener);
                 listener.onSuccess("Downloaded latest collection!");
                 return;
             }
@@ -236,7 +238,8 @@ public class SyncManager {
                 } catch (Exception ignored) {}
 
                 prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
-                listener.onSuccess("Synced: latest collection downloaded from AnkiWeb!");
+                syncMedia(client, listener);
+                       listener.onSuccess("Synced: latest collection downloaded from AnkiWeb!");
             }
 
         } catch (Exception e) {
@@ -312,7 +315,8 @@ public class SyncManager {
                             client.downloadCollection(dbPath);
                             // Success!
                             prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
-                            if (listener != null) listener.onSuccess("Collection downloaded successfully!");
+                            syncMedia(client, listener);
+                   if (listener != null) listener.onSuccess("Collection downloaded successfully!");
                             return;
                         } catch (Exception e) {
                             lastError = e;
@@ -406,6 +410,39 @@ public class SyncManager {
                 }
             }
         }).start();
+    }
+
+    // -------------------------------------------------------------------------
+    // MEDIA SYNC
+    // -------------------------------------------------------------------------
+
+    /**
+     * Sync media files from AnkiWeb. Call after collection sync while client is authenticated.
+     * Returns number of files downloaded. Errors are non-fatal (logged + reported via listener).
+     */
+    public int syncMedia(AnkiWebSyncClient client, SyncListener listener) {
+        try {
+            File mediaDir = getMediaDir();
+            int count = client.syncMedia(mediaDir, new AnkiWebSyncClient.MediaSyncListener() {
+                public void onProgress(String msg) {
+                    if (listener != null) listener.onProgress(msg);
+                }
+            });
+            if (listener != null) {
+                if (count > 0) {
+                    listener.onProgress("Media sync: downloaded " + count + " file(s).");
+                } else {
+                    listener.onProgress("Media sync: up to date.");
+                }
+            }
+            return count;
+        } catch (Exception e) {
+            android.util.Log.e("SyncManager", "Media sync failed", e);
+            if (listener != null) {
+                listener.onProgress("Media sync failed (non-critical): " + e.getMessage());
+            }
+            return 0;
+        }
     }
 
     private void copyFile(File src, File dst) throws IOException {

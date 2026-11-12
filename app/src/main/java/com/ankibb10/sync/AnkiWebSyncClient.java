@@ -15,8 +15,13 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 import javax.net.ssl.HttpsURLConnection;
 
@@ -483,4 +488,321 @@ public class AnkiWebSyncClient {
     public String getHostKey() { return mHostKey; }
     public void setHostKey(String hk) { mHostKey = hk; }
     public String getSyncBase() { return mSyncBase; }
+
+    // -------------------------------------------------------------------------
+    // MEDIA SYNC
+    // AnkiWeb media sync protocol:
+    //   msync/begin        → get session key (sk) and server USN
+    //   msync/mediaChanges → list of [filename, usn, md5] changed on server
+    //   msync/downloadFiles→ zip of requested files
+    //   msync/uploadChanges→ zip of local-new files  (we skip: read-only client)
+    //   msync/mediaSanity  → finalize / confirm counts match
+    // -------------------------------------------------------------------------
+
+    private String mMediaBase; // e.g. https://sync5.ankiweb.net/msync
+
+    private String getMediaBase() {
+        if (mMediaBase != null) return mMediaBase;
+        // Derive from mSyncBase: replace /sync suffix with /msync
+        String base = mSyncBase;
+        if (base.endsWith("/sync")) {
+            mMediaBase = base.substring(0, base.length() - 5) + "/msync";
+        } else {
+            mMediaBase = base.replace("/sync/", "/msync/");
+        }
+        return mMediaBase;
+    }
+
+    public interface MediaSyncListener {
+        void onProgress(String msg);
+    }
+
+    /**
+     * Full media sync: downloads all server-side media files missing locally.
+     * Returns number of files downloaded.
+     */
+    public int syncMedia(File mediaDir, MediaSyncListener listener) throws Exception {
+        if (mHostKey == null || mHostKey.isEmpty()) throw new Exception("Not authenticated");
+        if (!mediaDir.exists()) mediaDir.mkdirs();
+
+        // 1. Begin media sync — get session key + server USN
+        if (listener != null) listener.onProgress("Starting media sync...");
+        String[] beginResult = mediaSyncBegin();
+        String sk   = beginResult[0];
+        int serverUsn = Integer.parseInt(beginResult[1]);
+        Log.i(TAG, "Media sync begin: sk=" + sk + " serverUSN=" + serverUsn);
+
+        // 2. Fetch list of server changes since USN 0 (full sync, grab everything)
+        if (listener != null) listener.onProgress("Checking media files on AnkiWeb...");
+        List<String[]> changes = mediaSyncChanges(sk, 0);
+        Log.i(TAG, "Server has " + changes.size() + " media entries");
+
+        // Filter: only files we don't have locally (or deleted marker = empty hash)
+        List<String> toDownload = new ArrayList<>();
+        for (String[] entry : changes) {
+            String filename = entry[0];
+            String md5      = entry[2]; // empty string means deleted on server
+            if (md5 == null || md5.isEmpty()) continue; // skip deletions
+            File local = new File(mediaDir, filename);
+            if (!local.exists()) {
+                toDownload.add(filename);
+            }
+        }
+        Log.i(TAG, "Need to download " + toDownload.size() + " media files");
+
+        // 3. Download in batches of 25 (AnkiWeb limit per request)
+        int downloaded = 0;
+        int batchSize  = 25;
+        for (int i = 0; i < toDownload.size(); i += batchSize) {
+            List<String> batch = toDownload.subList(i, Math.min(i + batchSize, toDownload.size()));
+            if (listener != null) {
+                listener.onProgress("Downloading media " + (i + 1) + "/" + toDownload.size() + "...");
+            }
+            int got = mediaSyncDownloadFiles(sk, batch, mediaDir);
+            downloaded += got;
+        }
+
+        // 4. Finalize — tell server how many local files we have
+        int localCount = mediaDir.listFiles() != null ? mediaDir.listFiles().length : 0;
+        mediaSyncFinalize(sk, localCount);
+
+        return downloaded;
+    }
+
+    /** POST /msync/begin → returns [sessionKey, serverUSN] */
+    private String[] mediaSyncBegin() throws Exception {
+        String boundary = "----AnkiMedia" + System.currentTimeMillis();
+        HttpURLConnection conn = openConnection(getMediaBase() + "/begin", "POST");
+        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(30000);
+        conn.setReadTimeout(30000);
+
+        JSONObject payload = new JSONObject();
+        payload.put("k", mHostKey);
+        payload.put("v", "ankidroid,2.16.4,android media 1.0");
+        byte[] gz = gzipBytes(payload.toString().getBytes("UTF-8"));
+
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        writeField(body, boundary, "k", mHostKey);
+        writeFileField(body, boundary, "data", "data", gz);
+        writeBoundaryEnd(body, boundary);
+
+        byte[] reqData = body.toByteArray();
+        conn.setFixedLengthStreamingMode(reqData.length);
+        OutputStream os = conn.getOutputStream();
+        os.write(reqData);
+        os.flush(); os.close();
+
+        int code = conn.getResponseCode();
+        Log.i(TAG, "msync/begin code=" + code);
+        if (code != 200) {
+            String err = tryReadError(conn); conn.disconnect();
+            throw new Exception("msync/begin failed (" + code + "): " + err);
+        }
+
+        String resp = readGzipOrPlain(conn.getInputStream());
+        conn.disconnect();
+        Log.i(TAG, "msync/begin resp: " + resp);
+
+        JSONObject json = new JSONObject(resp);
+        // Response: {"data": {"sk": "...", "usn": 123}, "err": ""}
+        String sk;
+        int usn;
+        if (json.has("data") && !json.isNull("data")) {
+            JSONObject data = json.getJSONObject("data");
+            sk  = data.optString("sk", "");
+            usn = data.optInt("usn", 0);
+        } else {
+            sk  = json.optString("sk", "");
+            usn = json.optInt("usn", 0);
+        }
+        if (sk.isEmpty()) throw new Exception("msync/begin: no session key in response: " + resp);
+        return new String[]{sk, String.valueOf(usn)};
+    }
+
+    /** POST /msync/mediaChanges → list of [filename, usn, md5] */
+    private List<String[]> mediaSyncChanges(String sk, int lastUsn) throws Exception {
+        String boundary = "----AnkiMedia" + System.currentTimeMillis();
+        HttpURLConnection conn = openConnection(getMediaBase() + "/mediaChanges", "POST");
+        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(30000);
+        conn.setReadTimeout(60000);
+
+        JSONObject payload = new JSONObject();
+        payload.put("last", lastUsn);
+        payload.put("sk", sk);
+        byte[] gz = gzipBytes(payload.toString().getBytes("UTF-8"));
+
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        writeField(body, boundary, "sk", sk);
+        writeFileField(body, boundary, "data", "data", gz);
+        writeBoundaryEnd(body, boundary);
+
+        byte[] reqData = body.toByteArray();
+        conn.setFixedLengthStreamingMode(reqData.length);
+        OutputStream os = conn.getOutputStream();
+        os.write(reqData); os.flush(); os.close();
+
+        int code = conn.getResponseCode();
+        Log.i(TAG, "msync/mediaChanges code=" + code);
+        if (code != 200) {
+            String err = tryReadError(conn); conn.disconnect();
+            throw new Exception("msync/mediaChanges failed (" + code + "): " + err);
+        }
+
+        String resp = readGzipOrPlain(conn.getInputStream());
+        conn.disconnect();
+
+        // Response: {"data": {"files": [[name, usn, md5], ...], "toDelete": [], "usn": 123}, "err": ""}
+        List<String[]> result = new ArrayList<>();
+        JSONObject json = new JSONObject(resp);
+        org.json.JSONArray files = null;
+        if (json.has("data") && !json.isNull("data")) {
+            JSONObject data = json.getJSONObject("data");
+            if (data.has("files")) files = data.getJSONArray("files");
+        } else if (json.has("files")) {
+            files = json.getJSONArray("files");
+        }
+        if (files != null) {
+            for (int i = 0; i < files.length(); i++) {
+                org.json.JSONArray entry = files.getJSONArray(i);
+                String name = entry.getString(0);
+                String usn  = entry.optString(1, "0");
+                String md5  = entry.optString(2, "");
+                result.add(new String[]{name, usn, md5});
+            }
+        }
+        return result;
+    }
+
+    /**
+     * POST /msync/downloadFiles — download a zip of media files and extract them.
+     * Returns number of files successfully written.
+     */
+    private int mediaSyncDownloadFiles(String sk, List<String> filenames, File mediaDir) throws Exception {
+        String boundary = "----AnkiMedia" + System.currentTimeMillis();
+        HttpURLConnection conn = openConnection(getMediaBase() + "/downloadFiles", "POST");
+        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(30000);
+        conn.setReadTimeout(120000); // media downloads can be large
+
+        JSONObject payload = new JSONObject();
+        payload.put("sk", sk);
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (String f : filenames) arr.put(f);
+        payload.put("files", arr);
+        byte[] gz = gzipBytes(payload.toString().getBytes("UTF-8"));
+
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        writeField(body, boundary, "sk", sk);
+        writeFileField(body, boundary, "data", "data", gz);
+        writeBoundaryEnd(body, boundary);
+
+        byte[] reqData = body.toByteArray();
+        conn.setFixedLengthStreamingMode(reqData.length);
+        OutputStream os = conn.getOutputStream();
+        os.write(reqData); os.flush(); os.close();
+
+        int code = conn.getResponseCode();
+        Log.i(TAG, "msync/downloadFiles code=" + code + " for " + filenames.size() + " files");
+        if (code != 200) {
+            String err = tryReadError(conn); conn.disconnect();
+            throw new Exception("msync/downloadFiles failed (" + code + "): " + err);
+        }
+
+        // Response is a zip file (may be gzip-wrapped)
+        InputStream rawStream = conn.getInputStream();
+        // Peek first 2 bytes for gzip magic
+        byte[] peek = new byte[2];
+        int peekRead = rawStream.read(peek);
+        InputStream stream;
+        if (peekRead == 2 && peek[0] == (byte)0x1f && peek[1] == (byte)0x8b) {
+            // It's gzip-wrapped — decompress to get the zip
+            java.io.PushbackInputStream pis = new java.io.PushbackInputStream(rawStream, 2);
+            pis.unread(peek, 0, peekRead);
+            stream = new GZIPInputStream(pis);
+        } else {
+            java.io.PushbackInputStream pis = new java.io.PushbackInputStream(rawStream, 2);
+            if (peekRead > 0) pis.unread(peek, 0, peekRead);
+            stream = pis;
+        }
+
+        // Extract zip entries → save each to mediaDir
+        int count = 0;
+        ZipInputStream zis = new ZipInputStream(stream);
+        ZipEntry entry;
+        byte[] buf = new byte[8192];
+        while ((entry = zis.getNextEntry()) != null) {
+            String name = entry.getName();
+            if (name.isEmpty() || name.contains("..")) { zis.closeEntry(); continue; }
+            File out = new File(mediaDir, name);
+            FileOutputStream fos = new FileOutputStream(out);
+            int n;
+            while ((n = zis.read(buf)) != -1) fos.write(buf, 0, n);
+            fos.close();
+            zis.closeEntry();
+            count++;
+            Log.d(TAG, "Downloaded media file: " + name);
+        }
+        zis.close();
+        conn.disconnect();
+        Log.i(TAG, "Downloaded " + count + " media files in this batch");
+        return count;
+    }
+
+    /** POST /msync/mediaSanity — confirm local file count matches server */
+    private void mediaSyncFinalize(String sk, int localCount) {
+        try {
+            String boundary = "----AnkiMedia" + System.currentTimeMillis();
+            HttpURLConnection conn = openConnection(getMediaBase() + "/mediaSanity", "POST");
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+
+            JSONObject payload = new JSONObject();
+            payload.put("local", localCount);
+            payload.put("sk", sk);
+            byte[] gz = gzipBytes(payload.toString().getBytes("UTF-8"));
+
+            ByteArrayOutputStream body = new ByteArrayOutputStream();
+            writeField(body, boundary, "sk", sk);
+            writeFileField(body, boundary, "data", "data", gz);
+            writeBoundaryEnd(body, boundary);
+
+            byte[] reqData = body.toByteArray();
+            conn.setFixedLengthStreamingMode(reqData.length);
+            OutputStream os = conn.getOutputStream();
+            os.write(reqData); os.flush(); os.close();
+
+            int code = conn.getResponseCode();
+            Log.i(TAG, "msync/mediaSanity code=" + code);
+            // Best-effort — don't throw on failure
+            try { conn.getInputStream().close(); } catch (Exception ignored) {}
+            conn.disconnect();
+        } catch (Exception e) {
+            Log.w(TAG, "mediaSanity failed (ignored): " + e.getMessage());
+        }
+    }
+
+    /** Read response as plain string; handles optional gzip encoding */
+    private String readGzipOrPlain(InputStream is) throws IOException {
+        // Buffer into bytes first so we can inspect
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+        byte[] raw = baos.toByteArray();
+        if (raw.length >= 2 && raw[0] == (byte)0x1f && raw[1] == (byte)0x8b) {
+            GZIPInputStream gz = new GZIPInputStream(new java.io.ByteArrayInputStream(raw));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            while ((n = gz.read(buf)) != -1) out.write(buf, 0, n);
+            gz.close();
+            return out.toString("UTF-8");
+        }
+        return new String(raw, "UTF-8");
+    }
 }
