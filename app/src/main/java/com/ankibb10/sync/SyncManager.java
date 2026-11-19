@@ -296,6 +296,34 @@ public class SyncManager {
                     new File(dbPath + "-wal").delete();
                     new File(dbPath + "-shm").delete();
 
+                    // Check if local collection is already up-to-date (skip full download for large decks)
+                    boolean skipDownload = false;
+                    try {
+                        if (new File(dbPath).exists()) {
+                            JSONObject serverMeta = client.getMeta();
+                            long serverMod = serverMeta.optLong("mod", 0);
+                            long serverScm = serverMeta.optLong("scm", 0);
+                            AnkiDatabase localDb = new AnkiDatabase(dbPath);
+                            long localMod = localDb.getColMod();
+                            long localScm = localDb.getColScm();
+                            localDb.close();
+                            if (serverMod > 0 && localMod == serverMod && localScm == serverScm) {
+                                skipDownload = true;
+                                if (listener != null) listener.onProgress("Collection already up to date, skipping download.");
+                                Log.i(TAG, "Sync: collection up to date (mod=" + localMod + "), skipping download");
+                            }
+                        }
+                    } catch (Exception metaEx) {
+                        Log.w(TAG, "Could not check server mod, proceeding with download: " + metaEx.getMessage());
+                    }
+
+                    if (skipDownload) {
+                        prefs.edit().putLong(KEY_LAST_SYNC, System.currentTimeMillis()).commit();
+                        syncMedia(client, listener);
+                        if (listener != null) listener.onSuccess("Sync complete (collection unchanged).");
+                        return;
+                    }
+
                     // Attempt download — abort stuck transactions between retries
                     Exception lastError = null;
                     int maxAttempts = 3;

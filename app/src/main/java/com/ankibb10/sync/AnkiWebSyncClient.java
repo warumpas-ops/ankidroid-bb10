@@ -748,7 +748,7 @@ public class AnkiWebSyncClient {
             if ("_meta".equals(key)) continue;
             String realName = key;
             if (meta != null && meta.has(key)) {
-                realName = meta.getString(key);
+                realName = meta.optString(key, key); // safe against integer JSON values
             }
             if (realName.isEmpty() || realName.contains("..")) continue;
             File out = new File(mediaDir, realName);

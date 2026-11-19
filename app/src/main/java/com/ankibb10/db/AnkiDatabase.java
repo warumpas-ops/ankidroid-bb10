@@ -797,10 +797,19 @@ public class AnkiDatabase {
         for (Map.Entry<String, String> e : fields.entrySet()) {
             String val = e.getValue() == null ? "" : e.getValue();
             String processed = renderCloze(val, clozeOrd, isBack);
-            result = result.replace("{{" + e.getKey() + "}}", processed);
-            result = result.replace("{{cloze:" + e.getKey() + "}}", processed);
-            result = result.replace("{{text:" + e.getKey() + "}}", stripHtml(processed));
+            String key = e.getKey();
+            result = result.replace("{{" + key + "}}", processed);
+            result = result.replace("{{cloze:" + key + "}}", processed);
+            result = result.replace("{{text:" + key + "}}", stripHtml(processed));
+            // AnKing and common filter variants - render field value directly
+            result = result.replace("{{type:" + key + "}}", processed);
+            result = result.replace("{{furigana:" + key + "}}", processed);
+            result = result.replace("{{kanji:" + key + "}}", processed);
+            result = result.replace("{{kana:" + key + "}}", processed);
+            result = result.replace("{{nc:" + key + "}}", processed);
+            result = result.replace("{{hint:" + key + "}}", "<details><summary>[Show " + key + "]</summary>" + processed + "</details>");
         }
+        // Strip remaining unresolved {{...}} placeholders
         result = result.replaceAll("\\{\\{[^}]+\\}\\}", "");
         result = renderSoundTags(result);
         return result;
